@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import struct
 import threading
 import time
 from collections import deque
+from typing import NamedTuple
 
 import dearpygui.dearpygui as dpg
 import numpy as np
@@ -22,6 +24,12 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_SERIAL_PORT = os.environ.get("IMUPEN_SERIAL_PORT", "COM6")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
+
+PACKET_PREAMBLE = 0xAA55
+PACKET_VERSION = 1
+PACKET_STRUCT = struct.Struct("<HHII6fH")
+PACKET_SIZE = PACKET_STRUCT.size
+PREAMBLE_BYTES = PACKET_PREAMBLE.to_bytes(2, "little")
 
 # ---- Shared state between serial thread and GUI thread ----
 HISTORY_LENGTH = DEFAULT_HISTORY_LENGTH
@@ -40,12 +48,84 @@ last_sample_interval_ms: float | None = None
 stop_event = threading.Event()
 
 
+class ImuPacket(NamedTuple):
+    sequence: int
+    timestamp_ms: int
+    ax_g: float
+    ay_g: float
+    az_g: float
+    gx_dps: float
+    gy_dps: float
+    gz_dps: float
+
+
+def checksum_bytes(data: bytes) -> int:
+    """Return a simple 16-bit additive checksum of ``data``."""
+
+    return sum(data) & 0xFFFF
+
+
+def extract_packets(buffer: bytearray) -> list[ImuPacket]:
+    """Pull as many complete packets as possible out of ``buffer``."""
+
+    packets: list[ImuPacket] = []
+    while True:
+        idx = buffer.find(PREAMBLE_BYTES)
+        if idx == -1:
+            buffer.clear()
+            break
+        if idx > 0:
+            del buffer[:idx]
+        if len(buffer) < PACKET_SIZE:
+            break
+
+        raw_packet = bytes(buffer[:PACKET_SIZE])
+        (
+            preamble,
+            version,
+            sequence,
+            timestamp_ms,
+            ax_g,
+            ay_g,
+            az_g,
+            gx_dps,
+            gy_dps,
+            gz_dps,
+            checksum,
+        ) = PACKET_STRUCT.unpack(raw_packet)
+
+        if preamble != PACKET_PREAMBLE:
+            del buffer[0]
+            continue
+
+        calc_checksum = checksum_bytes(raw_packet[:-2])
+        if version != PACKET_VERSION or checksum != calc_checksum:
+            del buffer[0]
+            continue
+
+        packets.append(
+            ImuPacket(
+                sequence=sequence,
+                timestamp_ms=timestamp_ms,
+                ax_g=ax_g,
+                ay_g=ay_g,
+                az_g=az_g,
+                gx_dps=gx_dps,
+                gy_dps=gy_dps,
+                gz_dps=gz_dps,
+            )
+        )
+        del buffer[:PACKET_SIZE]
+
+    return packets
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(
         description=(
-            "Visualise the direction vector derived from the CSV stream emitted"
+            "Visualise the direction vector derived from the binary stream emitted"
             " by the XIAO MG24 Sense sketch."
         )
     )
@@ -122,30 +202,11 @@ def quat_to_direction_vector(q, base_vector=None):
     return rot @ base_vector
 
 
-def parse_imu_line(line: str) -> tuple[float, ...] | None:
-    """Parse a single CSV line from the microcontroller sketch."""
-
-    # Skip possible header from Arduino
-    lowered = line.lower()
-    if lowered.startswith("t_ms") or lowered.startswith("ax"):
-        return None
-
-    parts = line.split(",")
-    if len(parts) != 7:
-        return None
-
-    try:
-        floats = tuple(map(float, parts))
-    except ValueError:
-        return None
-    return floats
-
-
 def serial_worker(serial_port: str, baud_rate: int):
     """
     Background thread:
       - opens serial port
-      - parses lines: t_ms, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps
+      - parses binary packets: sequence, timestamp, accel (g), gyro (deg/s)
       - runs Madgwick AHRS
       - updates shared orientation state
     """
@@ -155,6 +216,7 @@ def serial_worker(serial_port: str, baud_rate: int):
     madgwick = Madgwick()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     last_t_ms = None
+    last_sequence = None
 
     while not stop_event.is_set():
         try:
@@ -171,70 +233,87 @@ def serial_worker(serial_port: str, baud_rate: int):
 
         # Clean out any junk
         ser.reset_input_buffer()
+        buffer = bytearray()
 
         while not stop_event.is_set():
             try:
-                raw = ser.readline()
+                chunk = ser.read(ser.in_waiting or PACKET_SIZE)
             except serial.SerialException as e:
                 LOGGER.error("Serial read error: %s", e)
                 with quat_lock:
                     connection_status = f"Serial error during read: {e}"
                 break
 
-            if not raw:
+            if chunk:
+                buffer.extend(chunk)
+
+            packets = extract_packets(buffer)
+            if not packets:
                 continue
 
-            try:
-                line = raw.decode("utf-8", errors="ignore").strip()
-            except Exception:
-                continue
+            for packet in packets:
+                t_ms = packet.timestamp_ms
+                ax_g = packet.ax_g
+                ay_g = packet.ay_g
+                az_g = packet.az_g
+                gx_dps = packet.gx_dps
+                gy_dps = packet.gy_dps
+                gz_dps = packet.gz_dps
 
-            if not line:
-                continue
+                if last_sequence is None:
+                    status_suffix = ""
+                elif packet.sequence == last_sequence + 1:
+                    status_suffix = ""
+                elif packet.sequence > last_sequence:
+                    dropped = packet.sequence - last_sequence - 1
+                    LOGGER.warning("Detected %d dropped packet(s)", dropped)
+                    status_suffix = f"; dropped {dropped} pkt"
+                else:
+                    LOGGER.info("Packet sequence reset (device reboot?)")
+                    status_suffix = "; sequence reset"
+                last_sequence = packet.sequence
+                status_message = (
+                    f"Connected on {serial_port} (seq={packet.sequence}){status_suffix}"
+                )
 
-            parsed = parse_imu_line(line)
-            if parsed is None:
-                continue
+                # LSM6DS3: accel in g, gyro in deg/s -> convert to SI units
+                acc = np.array([ax_g, ay_g, az_g], dtype=float) * 9.80665
+                gyr = np.radians(np.array([gx_dps, gy_dps, gz_dps], dtype=float))
 
-            t_ms, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps = parsed
+                if last_t_ms is None:
+                    last_t_ms = t_ms
+                    first_sample_time_ms = t_ms
+                    continue
 
-            # LSM6DS3: accel in g, gyro in deg/s -> convert to SI units
-            acc = np.array([ax_g, ay_g, az_g], dtype=float) * 9.80665
-            gyr = np.radians(np.array([gx_dps, gy_dps, gz_dps], dtype=float))
-
-            if last_t_ms is None:
+                dt = (t_ms - last_t_ms) / 1000.0
+                if dt <= 0:
+                    LOGGER.debug("Ignoring non-positive dt=%s", dt)
+                    last_t_ms = t_ms
+                    first_sample_time_ms = t_ms
+                    continue
                 last_t_ms = t_ms
-                first_sample_time_ms = t_ms
-                continue
 
-            dt = (t_ms - last_t_ms) / 1000.0
-            if dt <= 0:
-                LOGGER.debug("Ignoring non-positive dt=%s", dt)
-                last_t_ms = t_ms
-                first_sample_time_ms = t_ms
-                continue
-            last_t_ms = t_ms
+                # Run Madgwick update; dt passed explicitly per sample
+                q = madgwick.updateIMU(q, gyr=gyr, acc=acc, dt=dt)
+                if q is None:
+                    LOGGER.debug("Madgwick update returned None")
+                    continue
 
-            # Run Madgwick update; dt passed explicitly per sample
-            q = madgwick.updateIMU(q, gyr=gyr, acc=acc, dt=dt)
-            if q is None:
-                LOGGER.debug("Madgwick update returned None")
-                continue
+                direction_vec = quat_to_direction_vector(q)
+                elapsed_s = 0.0
+                if first_sample_time_ms is not None:
+                    elapsed_s = max(0.0, (t_ms - first_sample_time_ms) / 1000.0)
+                last_sample_interval_ms = dt * 1000.0
 
-            direction_vec = quat_to_direction_vector(q)
-            elapsed_s = 0.0
-            if first_sample_time_ms is not None:
-                elapsed_s = max(0.0, (t_ms - first_sample_time_ms) / 1000.0)
-            last_sample_interval_ms = dt * 1000.0
-
-            with quat_lock:
-                current_quat = np.array(q, copy=True)
-                current_direction_vec = np.array(direction_vec, copy=True)
-                vec_x_hist.append(direction_vec[0])
-                vec_y_hist.append(direction_vec[1])
-                vec_z_hist.append(direction_vec[2])
-                sample_time_hist.append(elapsed_s)
-                sample_index += 1
+                with quat_lock:
+                    connection_status = status_message
+                    current_quat = np.array(q, copy=True)
+                    current_direction_vec = np.array(direction_vec, copy=True)
+                    vec_x_hist.append(direction_vec[0])
+                    vec_y_hist.append(direction_vec[1])
+                    vec_z_hist.append(direction_vec[2])
+                    sample_time_hist.append(elapsed_s)
+                    sample_index = packet.sequence
 
         try:
             ser.close()
@@ -243,6 +322,7 @@ def serial_worker(serial_port: str, baud_rate: int):
 
         last_t_ms = None
         first_sample_time_ms = None
+        last_sequence = None
         LOGGER.info("Reconnecting to serial port %s after short delay", serial_port)
         time.sleep(0.5)  # brief pause before trying to reconnect
 
