@@ -8,8 +8,12 @@ const uint32_t SAMPLE_PERIOD_MS = 10;   // ~100 Hz
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
-    // Wait for USB serial to come up (especially on some OSes)
+  // Some host OSes toggle DTR when the port is opened which resets the
+  // microcontroller.  If we block forever waiting for Serial here, the sketch
+  // may never make it into loop(), so only wait for a short window.
+  const uint32_t serial_wait_start = millis();
+  while (!Serial && (millis() - serial_wait_start) < 2000) {
+    delay(10);
   }
 
   // On XIAO MG24 Sense the IMU power is enabled via PD5 (per Seeed's docs)
