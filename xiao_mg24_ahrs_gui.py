@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import os
 import threading
 import time
@@ -28,10 +27,10 @@ DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
 HISTORY_LENGTH = DEFAULT_HISTORY_LENGTH
 quat_lock = threading.Lock()
 current_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-current_euler_deg = np.array([0.0, 0.0, 0.0], dtype=float)
-roll_hist = deque(maxlen=HISTORY_LENGTH)
-pitch_hist = deque(maxlen=HISTORY_LENGTH)
-yaw_hist = deque(maxlen=HISTORY_LENGTH)
+current_direction_vec = np.array([0.0, 0.0, -1.0], dtype=float)
+vec_x_hist = deque(maxlen=HISTORY_LENGTH)
+vec_y_hist = deque(maxlen=HISTORY_LENGTH)
+vec_z_hist = deque(maxlen=HISTORY_LENGTH)
 connection_status = "Not connected"
 sample_index = 0
 
@@ -43,8 +42,8 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Visualise roll/pitch/yaw derived from the CSV stream emitted by "
-            "the XIAO MG24 Sense sketch."
+            "Visualise the direction vector derived from the CSV stream emitted"
+            " by the XIAO MG24 Sense sketch."
         )
     )
     parser.add_argument(
@@ -79,12 +78,12 @@ def parse_args() -> argparse.Namespace:
 def configure_history_length(length: int) -> None:
     """Resize the shared history deques."""
 
-    global HISTORY_LENGTH, roll_hist, pitch_hist, yaw_hist
+    global HISTORY_LENGTH, vec_x_hist, vec_y_hist, vec_z_hist
 
     HISTORY_LENGTH = max(1, length)
-    roll_hist = deque(maxlen=HISTORY_LENGTH)
-    pitch_hist = deque(maxlen=HISTORY_LENGTH)
-    yaw_hist = deque(maxlen=HISTORY_LENGTH)
+    vec_x_hist = deque(maxlen=HISTORY_LENGTH)
+    vec_y_hist = deque(maxlen=HISTORY_LENGTH)
+    vec_z_hist = deque(maxlen=HISTORY_LENGTH)
 
 
 def configure_logging(verbose: bool) -> None:
@@ -98,30 +97,22 @@ def configure_logging(verbose: bool) -> None:
     )
 
 
-def quat_to_euler_deg(q):
-    """
-    Convert quaternion [w, x, y, z] to roll/pitch/yaw in degrees.
-    Uses aerospace sequence (roll X, pitch Y, yaw Z).
-    """
+def quat_to_direction_vector(q, base_vector=None):
+    """Rotate ``base_vector`` by quaternion ``q`` and return the resulting vector."""
+
+    if base_vector is None:
+        base_vector = np.array([0.0, 0.0, -1.0], dtype=float)
+
     w, x, y, z = q
-
-    # roll (x-axis rotation)
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = math.atan2(t0, t1)
-
-    # pitch (y-axis rotation)
-    t2 = +2.0 * (w * y - z * x)
-    t2 = +1.0 if t2 > +1.0 else t2
-    t2 = -1.0 if t2 < -1.0 else t2
-    pitch_y = math.asin(t2)
-
-    # yaw (z-axis rotation)
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = math.atan2(t3, t4)
-
-    return tuple(math.degrees(v) for v in (roll_x, pitch_y, yaw_z))
+    rot = np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
+    return rot @ base_vector
 
 
 def parse_imu_line(line: str) -> tuple[float, ...] | None:
@@ -151,7 +142,7 @@ def serial_worker(serial_port: str, baud_rate: int):
       - runs Madgwick AHRS
       - updates shared orientation state
     """
-    global connection_status, current_quat, current_euler_deg, sample_index
+    global connection_status, current_quat, current_direction_vec, sample_index
 
     madgwick = Madgwick()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
@@ -219,16 +210,14 @@ def serial_worker(serial_port: str, baud_rate: int):
                 LOGGER.debug("Madgwick update returned None")
                 continue
 
-            roll_deg, pitch_deg, yaw_deg = quat_to_euler_deg(q)
+            direction_vec = quat_to_direction_vector(q)
 
             with quat_lock:
                 current_quat = np.array(q, copy=True)
-                current_euler_deg = np.array(
-                    [roll_deg, pitch_deg, yaw_deg], dtype=float
-                )
-                roll_hist.append(roll_deg)
-                pitch_hist.append(pitch_deg)
-                yaw_hist.append(yaw_deg)
+                current_direction_vec = np.array(direction_vec, copy=True)
+                vec_x_hist.append(direction_vec[0])
+                vec_y_hist.append(direction_vec[1])
+                vec_z_hist.append(direction_vec[2])
                 sample_index += 1
 
         try:
@@ -244,7 +233,7 @@ def run_gui():
     """
     DearPyGui front-end:
       - displays connection status
-      - shows current roll/pitch/yaw
+      - shows the current direction vector
       - plots recent history
     """
 
@@ -260,23 +249,25 @@ def run_gui():
         dpg.add_text("Not connected", tag="status_text")
         dpg.add_separator()
 
-        dpg.add_text("Euler angles (degrees):")
-        dpg.add_text("Roll:  0.00", tag="roll_text")
-        dpg.add_text("Pitch: 0.00", tag="pitch_text")
-        dpg.add_text("Yaw:   0.00", tag="yaw_text")
+        dpg.add_text("Direction vector (device-forward axis):")
+        dpg.add_text("X:  0.000", tag="vec_x_text")
+        dpg.add_text("Y:  0.000", tag="vec_y_text")
+        dpg.add_text("Z:  0.000", tag="vec_z_text")
 
         dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
 
-        with dpg.plot(label="Yaw / Pitch / Roll", height=350, width=-1):
+        with dpg.plot(label="Direction vector components", height=350, width=-1):
             dpg.add_plot_legend()
             dpg.add_plot_axis(dpg.mvXAxis, label="Sample idx", tag="x_axis")
-            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Angle (deg)", tag="y_axis")
-            dpg.set_axis_limits("y_axis", -180.0, 180.0)
+            y_axis = dpg.add_plot_axis(
+                dpg.mvYAxis, label="Component", tag="y_axis"
+            )
+            dpg.set_axis_limits("y_axis", -1.2, 1.2)
 
-            dpg.add_line_series([], [], label="Roll", parent=y_axis, tag="roll_series")
-            dpg.add_line_series([], [], label="Pitch", parent=y_axis, tag="pitch_series")
-            dpg.add_line_series([], [], label="Yaw", parent=y_axis, tag="yaw_series")
+            dpg.add_line_series([], [], label="X", parent=y_axis, tag="vec_x_series")
+            dpg.add_line_series([], [], label="Y", parent=y_axis, tag="vec_y_series")
+            dpg.add_line_series([], [], label="Z", parent=y_axis, tag="vec_z_series")
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
@@ -285,23 +276,23 @@ def run_gui():
     while dpg.is_dearpygui_running():
         with quat_lock:
             status = connection_status
-            euler = np.array(current_euler_deg, copy=True)
-            roll_vals = list(roll_hist)
-            pitch_vals = list(pitch_hist)
-            yaw_vals = list(yaw_hist)
+            direction_vec = np.array(current_direction_vec, copy=True)
+            vec_x_vals = list(vec_x_hist)
+            vec_y_vals = list(vec_y_hist)
+            vec_z_vals = list(vec_z_hist)
 
         dpg.set_value("status_text", status)
-        dpg.set_value("roll_text", f"Roll:  {euler[0]:6.2f}")
-        dpg.set_value("pitch_text", f"Pitch: {euler[1]:6.2f}")
-        dpg.set_value("yaw_text", f"Yaw:   {euler[2]:6.2f}")
+        dpg.set_value("vec_x_text", f"X: {direction_vec[0]:7.3f}")
+        dpg.set_value("vec_y_text", f"Y: {direction_vec[1]:7.3f}")
+        dpg.set_value("vec_z_text", f"Z: {direction_vec[2]:7.3f}")
 
-        n = len(roll_vals)
+        n = len(vec_x_vals)
         if n > 0:
             # just use sample index as x-axis
             x_vals = list(range(-n + 1, 1))
-            dpg.set_value("roll_series", [x_vals, roll_vals])
-            dpg.set_value("pitch_series", [x_vals, pitch_vals])
-            dpg.set_value("yaw_series", [x_vals, yaw_vals])
+            dpg.set_value("vec_x_series", [x_vals, vec_x_vals])
+            dpg.set_value("vec_y_series", [x_vals, vec_y_vals])
+            dpg.set_value("vec_z_series", [x_vals, vec_z_vals])
 
         dpg.render_dearpygui_frame()
 
