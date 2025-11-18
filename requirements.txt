@@ -1,0 +1,4 @@
+ahrs
+pyserial
+dearpygui
+numpy
