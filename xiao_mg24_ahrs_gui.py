@@ -23,7 +23,7 @@ import dearpygui.dearpygui as dpg
 
 # ---- Configuration ----
 # Change this to your actual port, e.g. "/dev/ttyACM0" or "/dev/ttyUSB0" on Linux/macOS
-SERIAL_PORT = "COM3"
+SERIAL_PORT = "COM6"
 BAUD_RATE = 115200
 
 HISTORY_LENGTH = 200       # number of samples to keep for plotting
