@@ -1,34 +1,31 @@
-"""
-XIAO MG24 Sense -> Python AHRS -> DearPyGui demo
+"""Simple GUI for visualising AHRS output from the XIAO MG24 Sense board."""
 
-- Arduino sketch on the MG24 Sense streams IMU data as CSV over USB serial.
-- This Python script:
-    * reads the CSV stream with pyserial
-    * runs Madgwick AHRS from the `ahrs` package
-    * visualizes roll/pitch/yaw in a DearPyGui GUI
+from __future__ import annotations
 
-Required Python packages:
-    pip install ahrs pyserial dearpygui numpy
-"""
-
+import argparse
+import logging
 import math
+import os
 import threading
 import time
 from collections import deque
 
+import dearpygui.dearpygui as dpg
 import numpy as np
 import serial
 from ahrs.filters import Madgwick
-import dearpygui.dearpygui as dpg
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 # ---- Configuration ----
-# Change this to your actual port, e.g. "/dev/ttyACM0" or "/dev/ttyUSB0" on Linux/macOS
-SERIAL_PORT = "COM6"
-BAUD_RATE = 115200
-
-HISTORY_LENGTH = 200       # number of samples to keep for plotting
+DEFAULT_SERIAL_PORT = os.environ.get("IMUPEN_SERIAL_PORT", "COM6")
+DEFAULT_BAUD_RATE = 115200
+DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
 
 # ---- Shared state between serial thread and GUI thread ----
+HISTORY_LENGTH = DEFAULT_HISTORY_LENGTH
 quat_lock = threading.Lock()
 current_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 current_euler_deg = np.array([0.0, 0.0, 0.0], dtype=float)
@@ -39,6 +36,66 @@ connection_status = "Not connected"
 sample_index = 0
 
 stop_event = threading.Event()
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Visualise roll/pitch/yaw derived from the CSV stream emitted by "
+            "the XIAO MG24 Sense sketch."
+        )
+    )
+    parser.add_argument(
+        "--serial-port",
+        default=DEFAULT_SERIAL_PORT,
+        help=(
+            "Serial port to open (can also be provided via IMUPEN_SERIAL_PORT "
+            "environment variable)."
+        ),
+    )
+    parser.add_argument(
+        "--baud-rate",
+        type=int,
+        default=DEFAULT_BAUD_RATE,
+        help="Baud rate that matches the Arduino sketch (default: 115200).",
+    )
+    parser.add_argument(
+        "--history-length",
+        type=int,
+        default=DEFAULT_HISTORY_LENGTH,
+        help="Number of samples to keep for the rolling plot (default: 200).",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging on stdout.",
+    )
+    return parser.parse_args()
+
+
+def configure_history_length(length: int) -> None:
+    """Resize the shared history deques."""
+
+    global HISTORY_LENGTH, roll_hist, pitch_hist, yaw_hist
+
+    HISTORY_LENGTH = max(1, length)
+    roll_hist = deque(maxlen=HISTORY_LENGTH)
+    pitch_hist = deque(maxlen=HISTORY_LENGTH)
+    yaw_hist = deque(maxlen=HISTORY_LENGTH)
+
+
+def configure_logging(verbose: bool) -> None:
+    """Initialise the logging subsystem."""
+
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def quat_to_euler_deg(q):
@@ -67,7 +124,26 @@ def quat_to_euler_deg(q):
     return tuple(math.degrees(v) for v in (roll_x, pitch_y, yaw_z))
 
 
-def serial_worker():
+def parse_imu_line(line: str) -> tuple[float, ...] | None:
+    """Parse a single CSV line from the microcontroller sketch."""
+
+    # Skip possible header from Arduino
+    lowered = line.lower()
+    if lowered.startswith("t_ms") or lowered.startswith("ax"):
+        return None
+
+    parts = line.split(",")
+    if len(parts) != 7:
+        return None
+
+    try:
+        floats = tuple(map(float, parts))
+    except ValueError:
+        return None
+    return floats
+
+
+def serial_worker(serial_port: str, baud_rate: int):
     """
     Background thread:
       - opens serial port
@@ -83,10 +159,12 @@ def serial_worker():
 
     while not stop_event.is_set():
         try:
-            ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+            LOGGER.info("Opening serial port %s @ %d baud", serial_port, baud_rate)
+            ser = serial.Serial(serial_port, baud_rate, timeout=0.1)
             with quat_lock:
-                connection_status = f"Connected on {SERIAL_PORT}"
+                connection_status = f"Connected on {serial_port}"
         except serial.SerialException as e:
+            LOGGER.error("Serial error: %s", e)
             with quat_lock:
                 connection_status = f"Serial error: {e}; retrying..."
             time.sleep(1.0)
@@ -99,6 +177,7 @@ def serial_worker():
             try:
                 raw = ser.readline()
             except serial.SerialException as e:
+                LOGGER.error("Serial read error: %s", e)
                 with quat_lock:
                     connection_status = f"Serial error during read: {e}"
                 break
@@ -114,19 +193,11 @@ def serial_worker():
             if not line:
                 continue
 
-            # Skip possible header from Arduino
-            if line.lower().startswith("t_ms") or line.lower().startswith("ax"):
+            parsed = parse_imu_line(line)
+            if parsed is None:
                 continue
 
-            parts = line.split(",")
-            if len(parts) != 7:
-                continue
-
-            try:
-                t_ms = float(parts[0])
-                ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps = map(float, parts[1:])
-            except ValueError:
-                continue
+            t_ms, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps = parsed
 
             # LSM6DS3: accel in g, gyro in deg/s -> convert to SI units
             acc = np.array([ax_g, ay_g, az_g], dtype=float) * 9.80665
@@ -138,12 +209,14 @@ def serial_worker():
 
             dt = (t_ms - last_t_ms) / 1000.0
             if dt <= 0:
+                LOGGER.debug("Ignoring non-positive dt=%s", dt)
                 continue
             last_t_ms = t_ms
 
             # Run Madgwick update; dt passed explicitly per sample
             q = madgwick.updateIMU(q, gyr=gyr, acc=acc, dt=dt)
             if q is None:
+                LOGGER.debug("Madgwick update returned None")
                 continue
 
             roll_deg, pitch_deg, yaw_deg = quat_to_euler_deg(q)
@@ -163,6 +236,7 @@ def serial_worker():
         except Exception:
             pass
 
+        LOGGER.info("Reconnecting to serial port %s after short delay", serial_port)
         time.sleep(0.5)  # brief pause before trying to reconnect
 
 
@@ -235,7 +309,22 @@ def run_gui():
 
 
 def main():
-    worker = threading.Thread(target=serial_worker, daemon=True)
+    args = parse_args()
+    configure_logging(args.verbose)
+    configure_history_length(args.history_length)
+
+    LOGGER.info(
+        "Starting IMUpen GUI (port=%s, baud=%d, history=%d)",
+        args.serial_port,
+        args.baud_rate,
+        HISTORY_LENGTH,
+    )
+
+    worker = threading.Thread(
+        target=serial_worker,
+        args=(args.serial_port, args.baud_rate),
+        daemon=True,
+    )
     worker.start()
     try:
         run_gui()
