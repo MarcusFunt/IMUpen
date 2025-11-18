@@ -31,8 +31,11 @@ current_direction_vec = np.array([0.0, 0.0, -1.0], dtype=float)
 vec_x_hist = deque(maxlen=HISTORY_LENGTH)
 vec_y_hist = deque(maxlen=HISTORY_LENGTH)
 vec_z_hist = deque(maxlen=HISTORY_LENGTH)
+sample_time_hist = deque(maxlen=HISTORY_LENGTH)
 connection_status = "Not connected"
 sample_index = 0
+first_sample_time_ms: float | None = None
+last_sample_interval_ms: float | None = None
 
 stop_event = threading.Event()
 
@@ -78,12 +81,16 @@ def parse_args() -> argparse.Namespace:
 def configure_history_length(length: int) -> None:
     """Resize the shared history deques."""
 
-    global HISTORY_LENGTH, vec_x_hist, vec_y_hist, vec_z_hist
+    global HISTORY_LENGTH, vec_x_hist, vec_y_hist, vec_z_hist, sample_time_hist
+    global last_sample_interval_ms, first_sample_time_ms
 
     HISTORY_LENGTH = max(1, length)
     vec_x_hist = deque(maxlen=HISTORY_LENGTH)
     vec_y_hist = deque(maxlen=HISTORY_LENGTH)
     vec_z_hist = deque(maxlen=HISTORY_LENGTH)
+    sample_time_hist = deque(maxlen=HISTORY_LENGTH)
+    last_sample_interval_ms = None
+    first_sample_time_ms = None
 
 
 def configure_logging(verbose: bool) -> None:
@@ -143,6 +150,7 @@ def serial_worker(serial_port: str, baud_rate: int):
       - updates shared orientation state
     """
     global connection_status, current_quat, current_direction_vec, sample_index
+    global sample_time_hist, first_sample_time_ms, last_sample_interval_ms
 
     madgwick = Madgwick()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
@@ -196,11 +204,14 @@ def serial_worker(serial_port: str, baud_rate: int):
 
             if last_t_ms is None:
                 last_t_ms = t_ms
+                first_sample_time_ms = t_ms
                 continue
 
             dt = (t_ms - last_t_ms) / 1000.0
             if dt <= 0:
                 LOGGER.debug("Ignoring non-positive dt=%s", dt)
+                last_t_ms = t_ms
+                first_sample_time_ms = t_ms
                 continue
             last_t_ms = t_ms
 
@@ -211,6 +222,10 @@ def serial_worker(serial_port: str, baud_rate: int):
                 continue
 
             direction_vec = quat_to_direction_vector(q)
+            elapsed_s = 0.0
+            if first_sample_time_ms is not None:
+                elapsed_s = max(0.0, (t_ms - first_sample_time_ms) / 1000.0)
+            last_sample_interval_ms = dt * 1000.0
 
             with quat_lock:
                 current_quat = np.array(q, copy=True)
@@ -218,6 +233,7 @@ def serial_worker(serial_port: str, baud_rate: int):
                 vec_x_hist.append(direction_vec[0])
                 vec_y_hist.append(direction_vec[1])
                 vec_z_hist.append(direction_vec[2])
+                sample_time_hist.append(elapsed_s)
                 sample_index += 1
 
         try:
@@ -225,6 +241,8 @@ def serial_worker(serial_port: str, baud_rate: int):
         except Exception:
             pass
 
+        last_t_ms = None
+        first_sample_time_ms = None
         LOGGER.info("Reconnecting to serial port %s after short delay", serial_port)
         time.sleep(0.5)  # brief pause before trying to reconnect
 
@@ -255,11 +273,19 @@ def run_gui():
         dpg.add_text("Z:  0.000", tag="vec_z_text")
 
         dpg.add_separator()
+        dpg.add_text("Timing diagnostics:")
+        dpg.add_text("Last interval: n/a", tag="sample_interval_text")
+
+        dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
 
         with dpg.plot(label="Direction vector components", height=350, width=-1):
             dpg.add_plot_legend()
-            dpg.add_plot_axis(dpg.mvXAxis, label="Sample idx", tag="x_axis")
+            dpg.add_plot_axis(
+                dpg.mvXAxis,
+                label="Elapsed time (s)",
+                tag="x_axis",
+            )
             y_axis = dpg.add_plot_axis(
                 dpg.mvYAxis, label="Component", tag="y_axis"
             )
@@ -280,19 +306,26 @@ def run_gui():
             vec_x_vals = list(vec_x_hist)
             vec_y_vals = list(vec_y_hist)
             vec_z_vals = list(vec_z_hist)
+            time_vals = list(sample_time_hist)
+            interval_ms = last_sample_interval_ms
 
         dpg.set_value("status_text", status)
         dpg.set_value("vec_x_text", f"X: {direction_vec[0]:7.3f}")
         dpg.set_value("vec_y_text", f"Y: {direction_vec[1]:7.3f}")
         dpg.set_value("vec_z_text", f"Z: {direction_vec[2]:7.3f}")
 
+        if interval_ms is None or interval_ms <= 0:
+            interval_text = "Last interval: n/a"
+        else:
+            rate_hz = 1000.0 / interval_ms if interval_ms > 0 else 0.0
+            interval_text = f"Last interval: {interval_ms:6.1f} ms (~{rate_hz:5.1f} Hz)"
+        dpg.set_value("sample_interval_text", interval_text)
+
         n = len(vec_x_vals)
-        if n > 0:
-            # just use sample index as x-axis
-            x_vals = list(range(-n + 1, 1))
-            dpg.set_value("vec_x_series", [x_vals, vec_x_vals])
-            dpg.set_value("vec_y_series", [x_vals, vec_y_vals])
-            dpg.set_value("vec_z_series", [x_vals, vec_z_vals])
+        if n > 0 and len(time_vals) == n:
+            dpg.set_value("vec_x_series", [time_vals, vec_x_vals])
+            dpg.set_value("vec_y_series", [time_vals, vec_y_vals])
+            dpg.set_value("vec_z_series", [time_vals, vec_z_vals])
 
         dpg.render_dearpygui_frame()
 
