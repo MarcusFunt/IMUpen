@@ -6,8 +6,8 @@ up of two pieces:
 1. `xiao_mg24_imu_stream.ino` – an Arduino sketch that powers up the onboard
    LSM6DS3TR-C IMU and streams accelerometer/gyroscope CSV samples over USB.
 2. `xiao_mg24_ahrs_gui.py` – a Python utility that ingests the CSV stream,
-   filters it with the Madgwick AHRS algorithm, and plots roll/pitch/yaw using
-   DearPyGui.
+   filters it with the Madgwick AHRS algorithm, and visualises the resulting
+   direction vector using DearPyGui.
 
 The repo now also contains a lightweight CI workflow and a modern `.gitignore`
 to make contributing a little smoother.
