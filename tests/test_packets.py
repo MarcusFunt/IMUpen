@@ -66,7 +66,27 @@ def test_extract_packets_handles_noise_and_partial_data():
     packets = gui.extract_packets(buffer)
 
     assert [p.sequence for p in packets] == [1, 2]
-    assert buffer == bytearray()  # trailing bytes without a preamble are cleared
+    assert buffer == bytearray(b"\x02")  # trailing bytes keep the last possible preamble byte
+
+
+def test_extract_packets_handles_preamble_split_across_reads():
+    buffer = bytearray()
+    stream = build_packet(sequence=1, timestamp_ms=10)
+    stream += build_packet(sequence=2, timestamp_ms=20)
+
+    sequences = []
+    idx = 0
+    single_byte_read = True
+    while idx < len(stream):
+        chunk_len = 1 if single_byte_read else min(4, len(stream) - idx)
+        single_byte_read = not single_byte_read
+        chunk = stream[idx : idx + chunk_len]
+        idx += chunk_len
+        buffer.extend(chunk)
+        sequences.extend(packet.sequence for packet in gui.extract_packets(buffer))
+
+    assert sequences == [1, 2]
+    assert buffer == bytearray()
 
 
 def test_configure_history_length_resets_ring_buffers():

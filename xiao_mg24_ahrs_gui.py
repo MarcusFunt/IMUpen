@@ -78,15 +78,21 @@ def extract_packets(buffer: bytearray) -> list[ImuPacket]:
     """Pull as many complete packets as possible out of ``buffer``."""
 
     packets: list[ImuPacket] = []
+    tail_keep = max(len(PREAMBLE_BYTES) - 1, 0)
     while True:
         idx = buffer.find(PREAMBLE_BYTES)
         if idx == -1:
-            buffer.clear()
+            if tail_keep:
+                if len(buffer) > tail_keep:
+                    del buffer[:-tail_keep]
+                # otherwise leave ``buffer`` as-is so the partial preamble sticks around
+            else:
+                buffer.clear()
+            break
+        if len(buffer) - idx < PACKET_SIZE:
             break
         if idx > 0:
             del buffer[:idx]
-        if len(buffer) < PACKET_SIZE:
-            break
 
         raw_packet = bytes(buffer[:PACKET_SIZE])
         (
