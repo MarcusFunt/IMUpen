@@ -46,6 +46,9 @@ Command-line options:
 * `--history-length` – number of samples retained for the rolling plot.
 * `--filter` – choose `madgwick` (default) or `ukf` for the host-side AHRS.
 * `-v/--verbose` – enable debug logging.
+* `--diagnostics` – collect a short burst of packets and print troubleshooting
+  stats without launching the GUI. Use `--diagnostic-samples` to set the
+  capture length.
 
 The GUI displays the live direction vector, quaternion, Euler angles, and raw
 accelerometer/gyroscope values alongside timing diagnostics.
@@ -74,6 +77,20 @@ and version before passing each sample to the selected AHRS filter.
   Python files compile with the current interpreter.
 * Run `python -m compileall xiao_mg24_ahrs_gui.py` locally before committing to
   mirror the CI check.
+* Lightweight unit tests cover the packet parsing and math helpers. Execute
+  them with `python -m unittest discover`.
+
+### Troubleshooting
+
+If the GUI cannot connect to the board, run the diagnostics helper to capture a
+handful of packets and display drop/timing statistics:
+
+```bash
+python xiao_mg24_ahrs_gui.py --serial-port /dev/ttyACM0 --diagnostics
+```
+
+Warnings about dropped packets usually point to a USB bandwidth issue; try a
+shorter cable, a different port, or a lower baud rate.
 
 ## License
 

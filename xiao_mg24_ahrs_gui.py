@@ -6,15 +6,38 @@ import argparse
 import logging
 import os
 import struct
+import sys
 import threading
 import time
 from collections import deque
 from typing import Callable, NamedTuple
 
-import dearpygui.dearpygui as dpg
 import numpy as np
-import serial
-from ahrs.filters import Madgwick, UKF
+
+try:  # Optional during unit tests where DearPyGui may be unavailable
+    import dearpygui.dearpygui as dpg
+except Exception as exc:  # pragma: no cover - exercised manually with GUI
+    dpg = None
+    DPG_IMPORT_ERROR = exc
+else:  # pragma: no cover - simple attribute assignment
+    DPG_IMPORT_ERROR = None
+
+try:  # Serial is only required when communicating with the device
+    import serial
+except Exception as exc:  # pragma: no cover - serial not always installed
+    serial = None
+    SERIAL_IMPORT_ERROR = exc
+else:  # pragma: no cover - simple attribute assignment
+    SERIAL_IMPORT_ERROR = None
+
+try:  # The AHRS filters are optional when running the pure unit tests
+    from ahrs.filters import Madgwick, UKF
+except Exception as exc:  # pragma: no cover - depends on optional package
+    Madgwick = None  # type: ignore[assignment]
+    UKF = None  # type: ignore[assignment]
+    AHRS_IMPORT_ERROR = exc
+else:  # pragma: no cover - simple attribute assignment
+    AHRS_IMPORT_ERROR = None
 
 
 LOGGER = logging.getLogger(__name__)
@@ -53,6 +76,33 @@ elapsed_time_s: float = 0.0
 selected_filter_name: str = DEFAULT_FILTER_NAME
 
 stop_event = threading.Event()
+
+
+def require_dearpygui() -> None:
+    """Ensure DearPyGui is available before attempting to start the GUI."""
+
+    if dpg is None:
+        raise RuntimeError(
+            "DearPyGui is not installed; install the 'dearpygui' extra to use the GUI"
+        ) from DPG_IMPORT_ERROR
+
+
+def require_serial() -> None:
+    """Ensure pyserial is importable before interacting with hardware."""
+
+    if serial is None:
+        raise RuntimeError(
+            "pyserial is not installed; install the 'pyserial' extra to talk to the device"
+        ) from SERIAL_IMPORT_ERROR
+
+
+def require_ahrs() -> None:
+    """Ensure the AHRS filter library can be imported."""
+
+    if Madgwick is None or UKF is None:
+        raise RuntimeError(
+            "The 'ahrs' package is not installed; install it to run the filters"
+        ) from AHRS_IMPORT_ERROR
 
 
 class ImuPacket(NamedTuple):
@@ -168,6 +218,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable debug logging on stdout.",
     )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help=(
+            "Collect a handful of packets and print continuity/timing stats instead of "
+            "launching the GUI."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-samples",
+        type=int,
+        default=50,
+        help="How many packets to capture when running diagnostics (default: 50).",
+    )
     return parser.parse_args()
 
 
@@ -239,6 +303,7 @@ def quat_to_euler_degrees(q: np.ndarray) -> np.ndarray:
 def create_filter_runner(filter_name: str) -> Callable[[np.ndarray, np.ndarray, np.ndarray, float], np.ndarray | None]:
     """Return a callable that runs the requested filter for each sample."""
 
+    require_ahrs()
     name = filter_name.lower()
     if name == "ukf":
         ukf_filter = UKF()
@@ -268,6 +333,7 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
     global sample_time_hist, first_sample_time_ms, last_sample_interval_ms
     global current_euler_deg, current_acc_g, current_gyro_dps, elapsed_time_s
 
+    require_serial()
     filter_runner = create_filter_runner(filter_name)
     filter_label = filter_name.upper()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
@@ -401,6 +467,122 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
         time.sleep(0.5)  # brief pause before trying to reconnect
 
 
+class PacketDiagnostics(NamedTuple):
+    count: int
+    first_sequence: int | None
+    last_sequence: int | None
+    dropped_packets: int
+    avg_interval_ms: float | None
+    min_interval_ms: float | None
+    max_interval_ms: float | None
+
+
+def compute_packet_stats(packets: list[ImuPacket]) -> PacketDiagnostics:
+    """Summarise packet timings and continuity for troubleshooting."""
+
+    if not packets:
+        return PacketDiagnostics(0, None, None, 0, None, None, None)
+
+    dropped = 0
+    last_sequence = packets[0].sequence
+    intervals: list[float] = []
+    last_ts = packets[0].timestamp_ms
+    for pkt in packets[1:]:
+        if pkt.sequence > last_sequence + 1:
+            dropped += pkt.sequence - last_sequence - 1
+        last_sequence = pkt.sequence
+
+        delta = pkt.timestamp_ms - last_ts
+        last_ts = pkt.timestamp_ms
+        if delta > 0:
+            intervals.append(float(delta))
+
+    avg = sum(intervals) / len(intervals) if intervals else None
+    min_interval = min(intervals) if intervals else None
+    max_interval = max(intervals) if intervals else None
+    return PacketDiagnostics(
+        count=len(packets),
+        first_sequence=packets[0].sequence,
+        last_sequence=packets[-1].sequence,
+        dropped_packets=dropped,
+        avg_interval_ms=avg,
+        min_interval_ms=min_interval,
+        max_interval_ms=max_interval,
+    )
+
+
+def run_diagnostics(
+    serial_port: str,
+    baud_rate: int,
+    sample_target: int = 50,
+    timeout_s: float = 5.0,
+) -> bool:
+    """Collect a handful of packets and print stats for troubleshooting."""
+
+    require_serial()
+    sample_target = max(1, sample_target)
+    LOGGER.info(
+        "Collecting %d packet(s) from %s @ %d baud for diagnostics",  # noqa: G003
+        sample_target,
+        serial_port,
+        baud_rate,
+    )
+    try:
+        ser = serial.Serial(serial_port, baud_rate, timeout=0.1)
+    except serial.SerialException as exc:
+        LOGGER.error("Unable to open serial port %s: %s", serial_port, exc)
+        return False
+
+    collected: list[ImuPacket] = []
+    buffer = bytearray()
+    deadline = time.monotonic() + timeout_s
+    try:
+        while len(collected) < sample_target and time.monotonic() < deadline:
+            try:
+                chunk = ser.read(ser.in_waiting or 1)
+            except serial.SerialException as exc:
+                LOGGER.error("Serial read error during diagnostics: %s", exc)
+                break
+            if chunk:
+                buffer.extend(chunk)
+            packets = extract_packets(buffer)
+            if packets:
+                collected.extend(packets)
+    finally:
+        ser.close()
+
+    stats = compute_packet_stats(collected)
+    if stats.count == 0:
+        LOGGER.error("Did not capture any valid packets; check wiring and baud rate")
+        return False
+
+    LOGGER.info(
+        "Captured %d packets spanning seq %s-%s",
+        stats.count,
+        stats.first_sequence,
+        stats.last_sequence,
+    )
+    if stats.dropped_packets:
+        LOGGER.warning("Detected %d dropped packet(s) during diagnostics", stats.dropped_packets)
+    if stats.avg_interval_ms is not None:
+        rate = 1000.0 / stats.avg_interval_ms if stats.avg_interval_ms > 0 else 0.0
+        LOGGER.info(
+            "Average interval %.2f ms (~%.1f Hz); min=%.2f ms, max=%.2f ms",
+            stats.avg_interval_ms,
+            rate,
+            stats.min_interval_ms,
+            stats.max_interval_ms,
+        )
+    else:
+        LOGGER.warning("Unable to compute timing statistics (timestamps missing or constant)")
+
+    if stats.dropped_packets:
+        LOGGER.warning(
+            "Packet drops detected. Inspect USB cable, lower baud rate, or reduce history length."
+        )
+    return True
+
+
 def run_gui(filter_name: str):
     """
     DearPyGui front-end:
@@ -409,6 +591,7 @@ def run_gui(filter_name: str):
       - plots recent history
     """
 
+    require_dearpygui()
     dpg.create_context()
 
     # Typeface + colour palette shared across the widgets to give a subtle
@@ -723,6 +906,14 @@ def main():
     configure_history_length(args.history_length)
     global selected_filter_name
     selected_filter_name = args.filter
+
+    if args.diagnostics:
+        success = run_diagnostics(
+            args.serial_port,
+            args.baud_rate,
+            sample_target=args.diagnostic_samples,
+        )
+        sys.exit(0 if success else 2)
 
     LOGGER.info(
         "Starting IMUpen GUI (port=%s, baud=%d, history=%d)",
