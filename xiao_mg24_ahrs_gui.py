@@ -488,23 +488,25 @@ def run_gui(filter_name: str):
                 category=dpg.mvThemeCat_Core,
             )
         with dpg.theme_component(dpg.mvPlot):
+            # Plot specific colours live in the mvThemeCat_Plots category.  Use
+            # the mvPlotCol_* enumerations so DearPyGui 2.x recognises them.
             dpg.add_theme_color(
-                dpg.mvThemeCol_PlotLines,
+                dpg.mvPlotCol_Line,
                 plot_line_color,
                 category=dpg.mvThemeCat_Plots,
             )
             dpg.add_theme_color(
                 dpg.mvThemeCol_PlotLinesHovered,
                 (255, 180, 80, 255),
-                category=dpg.mvThemeCat_Plots,
+                category=dpg.mvThemeCat_Core,
             )
             dpg.add_theme_color(
-                dpg.mvThemeCol_PlotBorder,
+                dpg.mvPlotCol_PlotBorder,
                 separator_color,
                 category=dpg.mvThemeCat_Plots,
             )
             dpg.add_theme_color(
-                dpg.mvThemeCol_PlotFill,
+                dpg.mvPlotCol_Fill,
                 plot_fill_color,
                 category=dpg.mvThemeCat_Plots,
             )
