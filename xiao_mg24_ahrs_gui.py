@@ -11,6 +11,8 @@ import time
 from collections import deque
 from typing import Callable, NamedTuple
 
+import platform
+
 import dearpygui.dearpygui as dpg
 import numpy as np
 import serial
@@ -196,6 +198,41 @@ def configure_logging(verbose: bool) -> None:
         format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def resolve_default_font_path() -> str | None:
+    """Return a platform-appropriate font path if one can be found."""
+
+    candidates: list[str] = []
+    system = platform.system().lower()
+    if system == "windows":
+        system_root = os.environ.get("SystemRoot", r"C:\\Windows")
+        fonts_dir = os.path.join(system_root, "Fonts")
+        candidates.extend(
+            [
+                os.path.join(fonts_dir, "segoeui.ttf"),
+                os.path.join(fonts_dir, "arial.ttf"),
+            ]
+        )
+    elif system == "darwin":
+        candidates.extend(
+            [
+                "/System/Library/Fonts/SFNS.ttf",
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ]
+        )
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def quat_to_direction_vector(q, base_vector=None):
@@ -413,10 +450,17 @@ def run_gui(filter_name: str):
 
     # Typeface + colour palette shared across the widgets to give a subtle
     # "brand" identity without altering any data handling logic.
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    with dpg.font_registry():
-        default_font = dpg.add_font(font_path, 16)
-    dpg.bind_font(default_font)
+    default_font = None
+    font_path = resolve_default_font_path()
+    if font_path:
+        with dpg.font_registry():
+            default_font = dpg.add_font(font_path, 16)
+        dpg.bind_font(default_font)
+    else:
+        LOGGER.warning(
+            "Unable to locate a default font for this platform;"
+            " falling back to DearPyGui's built-in font."
+        )
 
     header_color = (0, 186, 188, 255)
     separator_color = (0, 90, 100, 255)
