@@ -59,9 +59,6 @@ sample_queue: queue.Queue["FilteredSample"] = queue.Queue()
 IMU_DRAW_TAG = "imu_drawlist"
 ACC_TRANSLATION_SCALE = 0.05  # how much to move the stick per g of accel
 ACC_TRANSLATION_LIMIT = 0.8  # clamp translation to keep the model visible
-DRAWLIST_PADDING = 12
-DRAWLIST_BG = (14, 26, 35, 180)
-DRAWLIST_FRAME = (0, 186, 188, 120)
 IMU_BODY_POINTS = np.array(
     [
         [0.0, 0.0, -0.7],
@@ -384,18 +381,6 @@ def update_imu_visual(quat_vals: np.ndarray, acc_vals: np.ndarray) -> None:
 
     dpg.delete_item(IMU_DRAW_TAG, children_only=True)
 
-    # Soft background and frame to give the 3D view some context.
-    dpg.draw_rectangle(
-        (DRAWLIST_PADDING, DRAWLIST_PADDING),
-        (max(width - DRAWLIST_PADDING, DRAWLIST_PADDING),
-         max(height - DRAWLIST_PADDING, DRAWLIST_PADDING)),
-        color=DRAWLIST_FRAME,
-        fill=DRAWLIST_BG,
-        thickness=2.0,
-        rounding=8.0,
-        parent=IMU_DRAW_TAG,
-    )
-
     body_points = transform_model_points(IMU_BODY_POINTS, rotation, translation)
     body_projected = project_points(body_points, width, height)
     dpg.draw_line(
@@ -663,11 +648,6 @@ def run_gui(filter_name: str):
 
     header_color = (0, 186, 188, 255)
     separator_color = (0, 90, 100, 255)
-    accent_text = (230, 245, 245, 255)
-    base_text = (215, 225, 230, 255)
-    window_bg = (10, 16, 24, 230)
-    child_bg = (14, 22, 32, 235)
-    frame_bg = (18, 28, 40, 255)
     plot_line_color = (255, 145, 0, 255)
     plot_fill_color = (0, 186, 188, 64)
 
@@ -689,55 +669,6 @@ def run_gui(filter_name: str):
             dpg.add_theme_color(
                 dpg.mvThemeCol_Separator,
                 separator_color,
-                category=dpg.mvThemeCat_Core,
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_Text, base_text, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_WindowBg, window_bg, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_ChildBg, child_bg, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_FrameBg, frame_bg, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_Button, frame_bg, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_ButtonHovered,
-                (30, 52, 70, 255),
-                category=dpg.mvThemeCat_Core,
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_ButtonActive,
-                (35, 70, 90, 255),
-                category=dpg.mvThemeCat_Core,
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_Border, separator_color, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_style(
-                dpg.mvStyleVar_WindowRounding, 10, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_style(
-                dpg.mvStyleVar_FrameRounding, 8, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_style(
-                dpg.mvStyleVar_ChildRounding, 8, category=dpg.mvThemeCat_Core
-            )
-            dpg.add_theme_style(
-                dpg.mvStyleVar_FramePadding,
-                8,
-                6,
-                category=dpg.mvThemeCat_Core,
-            )
-            dpg.add_theme_style(
-                dpg.mvStyleVar_ItemSpacing,
-                8,
-                6,
                 category=dpg.mvThemeCat_Core,
             )
         with dpg.theme_component(dpg.mvPlot):
@@ -762,11 +693,6 @@ def run_gui(filter_name: str):
                 dpg.mvPlotCol_Fill,
                 plot_fill_color,
                 category=dpg.mvThemeCat_Plots,
-            )
-            dpg.add_theme_color(
-                dpg.mvThemeCol_PlotHistogram,
-                (0, 186, 188, 200),
-                category=dpg.mvThemeCat_Core,
             )
     dpg.bind_theme(branded_theme)
 
@@ -919,8 +845,8 @@ def run_gui(filter_name: str):
 
     dpg.create_viewport(
         title="XIAO MG24 Sense AHRS Viewer",
-        width=1100,
-        height=780
+        width=900,
+        height=600
     )
 
     def info_table(rows: list[tuple[str, str, str]]):
@@ -941,36 +867,29 @@ def run_gui(filter_name: str):
                 dpg.add_text(label)
                 dpg.add_text(default, tag=tag)
 
-    with dpg.window(label="IMU Orientation", tag="main_window", width=1080, height=760):
-        dpg.add_spacer(height=6)
+    with dpg.window(label="IMU Orientation", tag="main_window", width=880, height=580):
         with dpg.group(horizontal=True):
-            dpg.add_text("\ud83d\udd0d XIAO MG24 Sense AHRS Dashboard", color=accent_text)
-            dpg.add_spacer(width=8)
-            dpg.add_text("Live orientation monitor with smoothed telemetry", color=base_text)
-        dpg.add_separator()
-
-        with dpg.group(horizontal=True):
-            with dpg.child_window(label="Status", width=270, height=200):
-                dpg.add_text("Status overview", color=accent_text)
+            with dpg.child_window(label="Status", width=250, height=180):
+                dpg.add_text("Status")
                 info_table(
                     [
                         ("Connection", "status_text", "Not connected"),
                         ("Filter", "filter_text", f"{filter_name.upper()}"),
                     ]
                 )
-                dpg.add_spacer(height=6)
-                dpg.add_text("Link health", color=base_text)
+                dpg.add_spacer(height=4)
+                dpg.add_text("Link health")
                 with dpg.group(horizontal=True):
                     dpg.add_button(
                         label="",
-                        width=26,
-                        height=26,
+                        width=24,
+                        height=24,
                         tag="status_indicator",
                         enabled=False,
                     )
                     dpg.add_text("Waiting", tag="status_indicator_label")
-                dpg.add_spacer(height=6)
-                dpg.add_text("Packet rate", color=base_text)
+                dpg.add_spacer(height=4)
+                dpg.add_text("Packet rate")
                 dpg.add_progress_bar(
                     tag="packet_rate_bar",
                     default_value=0.0,
@@ -978,8 +897,8 @@ def run_gui(filter_name: str):
                     width=-1,
                 )
 
-            with dpg.child_window(label="Direction", width=260, height=200):
-                dpg.add_text("Direction vector", color=accent_text)
+            with dpg.child_window(label="Direction", width=250, height=180):
+                dpg.add_text("Direction vector")
                 info_table(
                     [
                         ("X", "vec_x_text", "0.000"),
@@ -988,8 +907,8 @@ def run_gui(filter_name: str):
                     ]
                 )
 
-            with dpg.child_window(label="Orientation", width=360, height=200):
-                dpg.add_text("Orientation details", color=accent_text)
+            with dpg.child_window(label="Orientation", width=340, height=180):
+                dpg.add_text("Orientation details")
                 info_table(
                     [
                         ("Quat w", "quat_w_text", "1.000"),
@@ -1003,8 +922,8 @@ def run_gui(filter_name: str):
                 )
 
         with dpg.group(horizontal=True):
-            with dpg.child_window(label="Sensors", width=440, height=210):
-                dpg.add_text("Raw sensor data", color=accent_text)
+            with dpg.child_window(label="Sensors", width=400, height=200):
+                dpg.add_text("Raw sensor data")
                 info_table(
                     [
                         ("Accel X (g)", "acc_x_text", "0.000"),
@@ -1016,8 +935,8 @@ def run_gui(filter_name: str):
                     ]
                 )
 
-            with dpg.child_window(label="Timing", width=250, height=210):
-                dpg.add_text("Timing diagnostics", color=accent_text)
+            with dpg.child_window(label="Timing", width=220, height=200):
+                dpg.add_text("Timing diagnostics")
                 info_table(
                     [
                         ("Last interval", "sample_interval_text", "n/a"),
@@ -1026,30 +945,19 @@ def run_gui(filter_name: str):
                     ]
                 )
 
-            with dpg.child_window(label="Filter", width=190, height=210):
-                dpg.add_text("Filter profile", color=accent_text)
-                dpg.add_text("Host-side fusion", color=base_text)
-                dpg.add_spacer(height=4)
-                dpg.add_separator()
-                dpg.add_spacer(height=4)
-                dpg.add_text("Selected:")
-                dpg.add_text(f"{filter_name.upper()}", tag="filter_profile_text")
-                dpg.add_spacer(height=6)
-                dpg.add_text("Target rate: 200 Hz", color=base_text)
-
-        with dpg.child_window(label="IMU 3D View", width=-1, height=280):
-            dpg.add_text("IMU pose (accelerometer offset + roll/pitch/yaw)", color=accent_text)
-            dpg.add_spacer(height=6)
+        with dpg.child_window(label="IMU 3D View", width=-1, height=260):
+            dpg.add_text("IMU pose (accelerometer offset + roll/pitch/yaw)")
+            dpg.add_spacer(height=4)
             dpg.add_drawlist(
                 width=-1,
-                height=220,
+                height=210,
                 tag=IMU_DRAW_TAG,
             )
 
         dpg.add_separator()
-        dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)", color=accent_text)
+        dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
 
-        with dpg.plot(label="Direction vector components", height=360, width=-1):
+        with dpg.plot(label="Direction vector components", height=350, width=-1):
             dpg.add_plot_legend()
             dpg.add_plot_axis(
                 dpg.mvXAxis,
