@@ -25,6 +25,7 @@ DEFAULT_SERIAL_PORT = os.environ.get("IMUPEN_SERIAL_PORT", "COM6")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
 DEFAULT_FILTER_NAME = "madgwick"
+EXPECTED_PACKET_RATE_HZ = 100.0
 
 PACKET_PREAMBLE = 0xAA55
 PACKET_VERSION = 1
@@ -472,7 +473,15 @@ def run_gui(filter_name: str):
 
     with dpg.window(label="IMU Orientation", tag="main_window", width=880, height=580):
         dpg.add_text("Connection / Filter status:")
-        dpg.add_text("Not connected", tag="status_text")
+        with dpg.group(horizontal=True):
+            dpg.add_text("Not connected", tag="status_text")
+            dpg.add_button(
+                label="",
+                width=18,
+                height=18,
+                enabled=False,
+                tag="status_indicator",
+            )
         dpg.add_text(f"Filter: {filter_name.upper()}", tag="filter_text")
         dpg.add_separator()
 
@@ -505,6 +514,12 @@ def run_gui(filter_name: str):
         dpg.add_text("Last interval: n/a", tag="sample_interval_text")
         dpg.add_text("Sequence: n/a", tag="sample_sequence_text")
         dpg.add_text("Elapsed time: 0.0 s", tag="elapsed_time_text")
+        dpg.add_progress_bar(
+            tag="packet_rate_bar",
+            default_value=0.0,
+            overlay="Packet rate: 0.0 Hz",
+            width=300,
+        )
 
         dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
@@ -538,6 +553,28 @@ def run_gui(filter_name: str):
     dpg.setup_dearpygui()
     dpg.show_viewport()
 
+    # Theme helpers for the status indicator
+    def _make_indicator_theme(tag: str, color: tuple[int, int, int, int]):
+        with dpg.theme(tag=tag):
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, color)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, color)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, color)
+
+    _make_indicator_theme("status_theme_green", (0, 200, 0, 255))
+    _make_indicator_theme("status_theme_yellow", (230, 180, 0, 255))
+    _make_indicator_theme("status_theme_red", (200, 0, 0, 255))
+
+    def _status_theme_for_message(message: str) -> str:
+        lowered = message.lower()
+        if "dropped" in lowered or "error" in lowered:
+            return "status_theme_red"
+        if "retry" in lowered or "sequence reset" in lowered:
+            return "status_theme_yellow"
+        if "connected" in lowered:
+            return "status_theme_green"
+        return "status_theme_red"
+
     # Manual render loop so we can update each frame
     while dpg.is_dearpygui_running():
         with quat_lock:
@@ -556,6 +593,7 @@ def run_gui(filter_name: str):
             elapsed = elapsed_time_s
 
         dpg.set_value("status_text", status)
+        dpg.bind_item_theme("status_indicator", _status_theme_for_message(status))
         dpg.set_value("vec_x_text", f"X: {direction_vec[0]:7.3f}")
         dpg.set_value("vec_y_text", f"Y: {direction_vec[1]:7.3f}")
         dpg.set_value("vec_z_text", f"Z: {direction_vec[2]:7.3f}")
@@ -575,6 +613,7 @@ def run_gui(filter_name: str):
 
         if interval_ms is None or interval_ms <= 0:
             interval_text = "Last interval: n/a"
+            rate_hz = 0.0
         else:
             rate_hz = 1000.0 / interval_ms if interval_ms > 0 else 0.0
             interval_text = f"Last interval: {interval_ms:6.1f} ms (~{rate_hz:5.1f} Hz)"
@@ -584,6 +623,9 @@ def run_gui(filter_name: str):
         else:
             dpg.set_value("sample_sequence_text", "Sequence: n/a")
         dpg.set_value("elapsed_time_text", f"Elapsed time: {elapsed:7.2f} s")
+        progress_value = min(rate_hz / EXPECTED_PACKET_RATE_HZ, 1.0) if EXPECTED_PACKET_RATE_HZ > 0 else 0.0
+        dpg.set_value("packet_rate_bar", progress_value)
+        dpg.configure_item("packet_rate_bar", overlay=f"Packet rate: {rate_hz:5.1f} Hz")
 
         n = len(vec_x_vals)
         if n > 0 and len(time_vals) == n:
