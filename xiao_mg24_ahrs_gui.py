@@ -25,6 +25,7 @@ DEFAULT_SERIAL_PORT = os.environ.get("IMUPEN_SERIAL_PORT", "COM6")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
 DEFAULT_FILTER_NAME = "madgwick"
+PACKET_RATE_TARGET_HZ = 200.0
 
 PACKET_PREAMBLE = 0xAA55
 PACKET_VERSION = 1
@@ -464,6 +465,36 @@ def run_gui(filter_name: str):
                 category=dpg.mvThemeCat_Plots,
             )
     dpg.bind_theme(branded_theme)
+
+    def make_status_theme(color: tuple[int, int, int, int]):
+        with dpg.theme() as theme:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(
+                    dpg.mvThemeCol_Button, color, category=dpg.mvThemeCat_Core
+                )
+                dpg.add_theme_color(
+                    dpg.mvThemeCol_ButtonHovered,
+                    color,
+                    category=dpg.mvThemeCat_Core,
+                )
+                dpg.add_theme_color(
+                    dpg.mvThemeCol_ButtonActive,
+                    color,
+                    category=dpg.mvThemeCat_Core,
+                )
+        return theme
+
+    status_themes = {
+        "good": make_status_theme((0, 200, 0, 255)),
+        "warn": make_status_theme((220, 180, 0, 255)),
+        "bad": make_status_theme((220, 30, 30, 255)),
+    }
+    status_labels = {
+        "good": "Connected",
+        "warn": "Retrying",
+        "bad": "Dropped",
+    }
+
     dpg.create_viewport(
         title="XIAO MG24 Sense AHRS Viewer",
         width=900,
@@ -497,6 +528,25 @@ def run_gui(filter_name: str):
                         ("Connection", "status_text", "Not connected"),
                         ("Filter", "filter_text", f"{filter_name.upper()}"),
                     ]
+                )
+                dpg.add_spacer(height=4)
+                dpg.add_text("Link health")
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="",
+                        width=24,
+                        height=24,
+                        tag="status_indicator",
+                        enabled=False,
+                    )
+                    dpg.add_text("Waiting", tag="status_indicator_label")
+                dpg.add_spacer(height=4)
+                dpg.add_text("Packet rate")
+                dpg.add_progress_bar(
+                    tag="packet_rate_bar",
+                    default_value=0.0,
+                    overlay="n/a",
+                    width=-1,
                 )
 
             with dpg.child_window(label="Direction", width=250, height=180):
@@ -580,6 +630,18 @@ def run_gui(filter_name: str):
     dpg.show_viewport()
 
     # Manual render loop so we can update each frame
+    last_indicator_state = None
+
+    def classify_status(status: str) -> str:
+        text = status.lower()
+        if "dropped" in text or "error" in text:
+            return "bad"
+        if "retrying" in text or "sequence reset" in text:
+            return "warn"
+        if "connected" in text:
+            return "good"
+        return "warn"
+
     while dpg.is_dearpygui_running():
         with quat_lock:
             status = connection_status
@@ -625,6 +687,24 @@ def run_gui(filter_name: str):
         else:
             dpg.set_value("sample_sequence_text", "n/a")
         dpg.set_value("elapsed_time_text", f"{elapsed:7.2f}")
+
+        indicator_state = classify_status(status)
+        if indicator_state != last_indicator_state:
+            dpg.bind_item_theme("status_indicator", status_themes[indicator_state])
+            last_indicator_state = indicator_state
+        dpg.set_value(
+            "status_indicator_label",
+            status_labels.get(indicator_state, "Status"),
+        )
+
+        if interval_ms is None or interval_ms <= 0:
+            dpg.set_value("packet_rate_bar", 0.0)
+            dpg.configure_item("packet_rate_bar", overlay="n/a")
+        else:
+            rate_hz = 1000.0 / interval_ms if interval_ms > 0 else 0.0
+            normalized = min(rate_hz / PACKET_RATE_TARGET_HZ, 1.0)
+            dpg.set_value("packet_rate_bar", normalized)
+            dpg.configure_item("packet_rate_bar", overlay=f"{rate_hz:5.1f} Hz")
 
         n = len(vec_x_vals)
         if n > 0 and len(time_vals) == n:
