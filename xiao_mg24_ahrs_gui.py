@@ -470,41 +470,82 @@ def run_gui(filter_name: str):
         height=600
     )
 
+    def info_table(rows: list[tuple[str, str, str]]):
+        """Helper to create a two column table for label/value rows."""
+
+        table = dpg.add_table(
+            header_row=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            borders_innerH=True,
+            borders_innerV=True,
+            borders_outerH=True,
+            borders_outerV=True,
+        )
+        dpg.add_table_column(parent=table, width_fixed=True)
+        dpg.add_table_column(parent=table)
+        for label, tag, default in rows:
+            with dpg.table_row(parent=table):
+                dpg.add_text(label)
+                dpg.add_text(default, tag=tag)
+
     with dpg.window(label="IMU Orientation", tag="main_window", width=880, height=580):
-        dpg.add_text("Connection / Filter status:")
-        dpg.add_text("Not connected", tag="status_text")
-        dpg.add_text(f"Filter: {filter_name.upper()}", tag="filter_text")
-        dpg.add_separator()
+        with dpg.group(horizontal=True):
+            with dpg.child_window(label="Status", width=250, height=180):
+                dpg.add_text("Status")
+                info_table(
+                    [
+                        ("Connection", "status_text", "Not connected"),
+                        ("Filter", "filter_text", f"{filter_name.upper()}"),
+                    ]
+                )
 
-        dpg.add_text("Direction vector (device-forward axis):")
-        dpg.add_text("X:  0.000", tag="vec_x_text")
-        dpg.add_text("Y:  0.000", tag="vec_y_text")
-        dpg.add_text("Z:  0.000", tag="vec_z_text")
+            with dpg.child_window(label="Direction", width=250, height=180):
+                dpg.add_text("Direction vector")
+                info_table(
+                    [
+                        ("X", "vec_x_text", "0.000"),
+                        ("Y", "vec_y_text", "0.000"),
+                        ("Z", "vec_z_text", "0.000"),
+                    ]
+                )
 
-        dpg.add_separator()
-        dpg.add_text("Orientation details:")
-        dpg.add_text("Quat w:  1.000", tag="quat_w_text")
-        dpg.add_text("Quat x:  0.000", tag="quat_x_text")
-        dpg.add_text("Quat y:  0.000", tag="quat_y_text")
-        dpg.add_text("Quat z:  0.000", tag="quat_z_text")
-        dpg.add_text("Roll (deg):   0.0", tag="roll_text")
-        dpg.add_text("Pitch (deg):  0.0", tag="pitch_text")
-        dpg.add_text("Yaw (deg):    0.0", tag="yaw_text")
+            with dpg.child_window(label="Orientation", width=340, height=180):
+                dpg.add_text("Orientation details")
+                info_table(
+                    [
+                        ("Quat w", "quat_w_text", "1.000"),
+                        ("Quat x", "quat_x_text", "0.000"),
+                        ("Quat y", "quat_y_text", "0.000"),
+                        ("Quat z", "quat_z_text", "0.000"),
+                        ("Roll (deg)", "roll_text", "0.0"),
+                        ("Pitch (deg)", "pitch_text", "0.0"),
+                        ("Yaw (deg)", "yaw_text", "0.0"),
+                    ]
+                )
 
-        dpg.add_separator()
-        dpg.add_text("Raw sensor data:")
-        dpg.add_text("Accel X: 0.000 g", tag="acc_x_text")
-        dpg.add_text("Accel Y: 0.000 g", tag="acc_y_text")
-        dpg.add_text("Accel Z: 0.000 g", tag="acc_z_text")
-        dpg.add_text("Gyro X: 0.000 dps", tag="gyro_x_text")
-        dpg.add_text("Gyro Y: 0.000 dps", tag="gyro_y_text")
-        dpg.add_text("Gyro Z: 0.000 dps", tag="gyro_z_text")
+        with dpg.group(horizontal=True):
+            with dpg.child_window(label="Sensors", width=400, height=200):
+                dpg.add_text("Raw sensor data")
+                info_table(
+                    [
+                        ("Accel X (g)", "acc_x_text", "0.000"),
+                        ("Accel Y (g)", "acc_y_text", "0.000"),
+                        ("Accel Z (g)", "acc_z_text", "0.000"),
+                        ("Gyro X (dps)", "gyro_x_text", "0.000"),
+                        ("Gyro Y (dps)", "gyro_y_text", "0.000"),
+                        ("Gyro Z (dps)", "gyro_z_text", "0.000"),
+                    ]
+                )
 
-        dpg.add_separator()
-        dpg.add_text("Timing diagnostics:")
-        dpg.add_text("Last interval: n/a", tag="sample_interval_text")
-        dpg.add_text("Sequence: n/a", tag="sample_sequence_text")
-        dpg.add_text("Elapsed time: 0.0 s", tag="elapsed_time_text")
+            with dpg.child_window(label="Timing", width=220, height=200):
+                dpg.add_text("Timing diagnostics")
+                info_table(
+                    [
+                        ("Last interval", "sample_interval_text", "n/a"),
+                        ("Sequence", "sample_sequence_text", "n/a"),
+                        ("Elapsed (s)", "elapsed_time_text", "0.0"),
+                    ]
+                )
 
         dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
@@ -556,34 +597,34 @@ def run_gui(filter_name: str):
             elapsed = elapsed_time_s
 
         dpg.set_value("status_text", status)
-        dpg.set_value("vec_x_text", f"X: {direction_vec[0]:7.3f}")
-        dpg.set_value("vec_y_text", f"Y: {direction_vec[1]:7.3f}")
-        dpg.set_value("vec_z_text", f"Z: {direction_vec[2]:7.3f}")
-        dpg.set_value("quat_w_text", f"Quat w: {quat_vals[0]:7.3f}")
-        dpg.set_value("quat_x_text", f"Quat x: {quat_vals[1]:7.3f}")
-        dpg.set_value("quat_y_text", f"Quat y: {quat_vals[2]:7.3f}")
-        dpg.set_value("quat_z_text", f"Quat z: {quat_vals[3]:7.3f}")
-        dpg.set_value("roll_text", f"Roll (deg):  {euler_vals[0]:7.2f}")
-        dpg.set_value("pitch_text", f"Pitch (deg): {euler_vals[1]:7.2f}")
-        dpg.set_value("yaw_text", f"Yaw (deg):   {euler_vals[2]:7.2f}")
-        dpg.set_value("acc_x_text", f"Accel X: {acc_vals[0]:7.3f} g")
-        dpg.set_value("acc_y_text", f"Accel Y: {acc_vals[1]:7.3f} g")
-        dpg.set_value("acc_z_text", f"Accel Z: {acc_vals[2]:7.3f} g")
-        dpg.set_value("gyro_x_text", f"Gyro X: {gyro_vals[0]:7.3f} dps")
-        dpg.set_value("gyro_y_text", f"Gyro Y: {gyro_vals[1]:7.3f} dps")
-        dpg.set_value("gyro_z_text", f"Gyro Z: {gyro_vals[2]:7.3f} dps")
+        dpg.set_value("vec_x_text", f"{direction_vec[0]:7.3f}")
+        dpg.set_value("vec_y_text", f"{direction_vec[1]:7.3f}")
+        dpg.set_value("vec_z_text", f"{direction_vec[2]:7.3f}")
+        dpg.set_value("quat_w_text", f"{quat_vals[0]:7.3f}")
+        dpg.set_value("quat_x_text", f"{quat_vals[1]:7.3f}")
+        dpg.set_value("quat_y_text", f"{quat_vals[2]:7.3f}")
+        dpg.set_value("quat_z_text", f"{quat_vals[3]:7.3f}")
+        dpg.set_value("roll_text", f"{euler_vals[0]:7.2f}")
+        dpg.set_value("pitch_text", f"{euler_vals[1]:7.2f}")
+        dpg.set_value("yaw_text", f"{euler_vals[2]:7.2f}")
+        dpg.set_value("acc_x_text", f"{acc_vals[0]:7.3f}")
+        dpg.set_value("acc_y_text", f"{acc_vals[1]:7.3f}")
+        dpg.set_value("acc_z_text", f"{acc_vals[2]:7.3f}")
+        dpg.set_value("gyro_x_text", f"{gyro_vals[0]:7.3f}")
+        dpg.set_value("gyro_y_text", f"{gyro_vals[1]:7.3f}")
+        dpg.set_value("gyro_z_text", f"{gyro_vals[2]:7.3f}")
 
         if interval_ms is None or interval_ms <= 0:
-            interval_text = "Last interval: n/a"
+            interval_text = "n/a"
         else:
             rate_hz = 1000.0 / interval_ms if interval_ms > 0 else 0.0
-            interval_text = f"Last interval: {interval_ms:6.1f} ms (~{rate_hz:5.1f} Hz)"
+            interval_text = f"{interval_ms:6.1f} ms (~{rate_hz:5.1f} Hz)"
         dpg.set_value("sample_interval_text", interval_text)
         if seq:
-            dpg.set_value("sample_sequence_text", f"Sequence: {seq}")
+            dpg.set_value("sample_sequence_text", str(seq))
         else:
-            dpg.set_value("sample_sequence_text", "Sequence: n/a")
-        dpg.set_value("elapsed_time_text", f"Elapsed time: {elapsed:7.2f} s")
+            dpg.set_value("sample_sequence_text", "n/a")
+        dpg.set_value("elapsed_time_text", f"{elapsed:7.2f}")
 
         n = len(vec_x_vals)
         if n > 0 and len(time_vals) == n:
