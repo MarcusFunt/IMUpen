@@ -9,12 +9,12 @@ import struct
 import threading
 import time
 from collections import deque
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 import dearpygui.dearpygui as dpg
 import numpy as np
 import serial
-from ahrs.filters import Madgwick
+from ahrs.filters import Madgwick, UKF
 
 
 LOGGER = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_SERIAL_PORT = os.environ.get("IMUPEN_SERIAL_PORT", "COM6")
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_HISTORY_LENGTH = 200  # number of samples to keep for plotting
+DEFAULT_FILTER_NAME = "madgwick"
 
 PACKET_PREAMBLE = 0xAA55
 PACKET_VERSION = 1
@@ -36,6 +37,9 @@ HISTORY_LENGTH = DEFAULT_HISTORY_LENGTH
 quat_lock = threading.Lock()
 current_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 current_direction_vec = np.array([0.0, 0.0, -1.0], dtype=float)
+current_euler_deg = np.array([0.0, 0.0, 0.0], dtype=float)
+current_acc_g = np.array([0.0, 0.0, 0.0], dtype=float)
+current_gyro_dps = np.array([0.0, 0.0, 0.0], dtype=float)
 vec_x_hist = deque(maxlen=HISTORY_LENGTH)
 vec_y_hist = deque(maxlen=HISTORY_LENGTH)
 vec_z_hist = deque(maxlen=HISTORY_LENGTH)
@@ -44,6 +48,8 @@ connection_status = "Not connected"
 sample_index = 0
 first_sample_time_ms: float | None = None
 last_sample_interval_ms: float | None = None
+elapsed_time_s: float = 0.0
+selected_filter_name: str = DEFAULT_FILTER_NAME
 
 stop_event = threading.Event()
 
@@ -150,6 +156,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of samples to keep for the rolling plot (default: 200).",
     )
     parser.add_argument(
+        "--filter",
+        choices=["madgwick", "ukf"],
+        default=DEFAULT_FILTER_NAME,
+        help="AHRS filter to run on the host (default: madgwick).",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -162,7 +174,7 @@ def configure_history_length(length: int) -> None:
     """Resize the shared history deques."""
 
     global HISTORY_LENGTH, vec_x_hist, vec_y_hist, vec_z_hist, sample_time_hist
-    global last_sample_interval_ms, first_sample_time_ms
+    global last_sample_interval_ms, first_sample_time_ms, elapsed_time_s
 
     HISTORY_LENGTH = max(1, length)
     vec_x_hist = deque(maxlen=HISTORY_LENGTH)
@@ -171,6 +183,7 @@ def configure_history_length(length: int) -> None:
     sample_time_hist = deque(maxlen=HISTORY_LENGTH)
     last_sample_interval_ms = None
     first_sample_time_ms = None
+    elapsed_time_s = 0.0
 
 
 def configure_logging(verbose: bool) -> None:
@@ -202,18 +215,60 @@ def quat_to_direction_vector(q, base_vector=None):
     return rot @ base_vector
 
 
-def serial_worker(serial_port: str, baud_rate: int):
+def quat_to_euler_degrees(q: np.ndarray) -> np.ndarray:
+    """Convert quaternion ``q`` into roll/pitch/yaw (degrees)."""
+
+    w, x, y, z = q
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1:
+        pitch = np.sign(sinp) * (np.pi / 2)
+    else:
+        pitch = np.arcsin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+    return np.degrees([roll, pitch, yaw])
+
+
+def create_filter_runner(filter_name: str) -> Callable[[np.ndarray, np.ndarray, np.ndarray, float], np.ndarray | None]:
+    """Return a callable that runs the requested filter for each sample."""
+
+    name = filter_name.lower()
+    if name == "ukf":
+        ukf_filter = UKF()
+
+        def run(q: np.ndarray, gyr: np.ndarray, acc: np.ndarray, dt: float):
+            return ukf_filter.update(q=q, gyr=gyr, acc=acc, dt=dt)
+
+        return run
+
+    madgwick_filter = Madgwick()
+
+    def run(q: np.ndarray, gyr: np.ndarray, acc: np.ndarray, dt: float):
+        return madgwick_filter.updateIMU(q, gyr=gyr, acc=acc, dt=dt)
+
+    return run
+
+
+def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
     """
     Background thread:
       - opens serial port
       - parses binary packets: sequence, timestamp, accel (g), gyro (deg/s)
-      - runs Madgwick AHRS
+      - runs the requested AHRS filter
       - updates shared orientation state
     """
     global connection_status, current_quat, current_direction_vec, sample_index
     global sample_time_hist, first_sample_time_ms, last_sample_interval_ms
+    global current_euler_deg, current_acc_g, current_gyro_dps, elapsed_time_s
 
-    madgwick = Madgwick()
+    filter_runner = create_filter_runner(filter_name)
+    filter_label = filter_name.upper()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     last_t_ms = None
     last_sequence = None
@@ -273,7 +328,8 @@ def serial_worker(serial_port: str, baud_rate: int):
                     status_suffix = "; sequence reset"
                 last_sequence = packet.sequence
                 status_message = (
-                    f"Connected on {serial_port} (seq={packet.sequence}){status_suffix}"
+                    f"Connected on {serial_port} (seq={packet.sequence}, filter={filter_label})"
+                    f"{status_suffix}"
                 )
 
                 # LSM6DS3: accel in g, gyro in deg/s -> convert to SI units
@@ -293,13 +349,14 @@ def serial_worker(serial_port: str, baud_rate: int):
                     continue
                 last_t_ms = t_ms
 
-                # Run Madgwick update; dt passed explicitly per sample
-                q = madgwick.updateIMU(q, gyr=gyr, acc=acc, dt=dt)
+                # Run AHRS filter update; dt passed explicitly per sample
+                q = filter_runner(q, gyr=gyr, acc=acc, dt=dt)
                 if q is None:
-                    LOGGER.debug("Madgwick update returned None")
+                    LOGGER.debug("Filter update returned None")
                     continue
 
                 direction_vec = quat_to_direction_vector(q)
+                euler_deg = quat_to_euler_degrees(q)
                 elapsed_s = 0.0
                 if first_sample_time_ms is not None:
                     elapsed_s = max(0.0, (t_ms - first_sample_time_ms) / 1000.0)
@@ -309,11 +366,15 @@ def serial_worker(serial_port: str, baud_rate: int):
                     connection_status = status_message
                     current_quat = np.array(q, copy=True)
                     current_direction_vec = np.array(direction_vec, copy=True)
+                    current_euler_deg = np.array(euler_deg, copy=True)
+                    current_acc_g = np.array([ax_g, ay_g, az_g], dtype=float)
+                    current_gyro_dps = np.array([gx_dps, gy_dps, gz_dps], dtype=float)
                     vec_x_hist.append(direction_vec[0])
                     vec_y_hist.append(direction_vec[1])
                     vec_z_hist.append(direction_vec[2])
                     sample_time_hist.append(elapsed_s)
                     sample_index = packet.sequence
+                    elapsed_time_s = elapsed_s
 
         try:
             ser.close()
@@ -323,11 +384,13 @@ def serial_worker(serial_port: str, baud_rate: int):
         last_t_ms = None
         first_sample_time_ms = None
         last_sequence = None
+        with quat_lock:
+            elapsed_time_s = 0.0
         LOGGER.info("Reconnecting to serial port %s after short delay", serial_port)
         time.sleep(0.5)  # brief pause before trying to reconnect
 
 
-def run_gui():
+def run_gui(filter_name: str):
     """
     DearPyGui front-end:
       - displays connection status
@@ -345,6 +408,7 @@ def run_gui():
     with dpg.window(label="IMU Orientation", tag="main_window", width=880, height=580):
         dpg.add_text("Connection / Filter status:")
         dpg.add_text("Not connected", tag="status_text")
+        dpg.add_text(f"Filter: {filter_name.upper()}", tag="filter_text")
         dpg.add_separator()
 
         dpg.add_text("Direction vector (device-forward axis):")
@@ -353,8 +417,29 @@ def run_gui():
         dpg.add_text("Z:  0.000", tag="vec_z_text")
 
         dpg.add_separator()
+        dpg.add_text("Orientation details:")
+        dpg.add_text("Quat w:  1.000", tag="quat_w_text")
+        dpg.add_text("Quat x:  0.000", tag="quat_x_text")
+        dpg.add_text("Quat y:  0.000", tag="quat_y_text")
+        dpg.add_text("Quat z:  0.000", tag="quat_z_text")
+        dpg.add_text("Roll (deg):   0.0", tag="roll_text")
+        dpg.add_text("Pitch (deg):  0.0", tag="pitch_text")
+        dpg.add_text("Yaw (deg):    0.0", tag="yaw_text")
+
+        dpg.add_separator()
+        dpg.add_text("Raw sensor data:")
+        dpg.add_text("Accel X: 0.000 g", tag="acc_x_text")
+        dpg.add_text("Accel Y: 0.000 g", tag="acc_y_text")
+        dpg.add_text("Accel Z: 0.000 g", tag="acc_z_text")
+        dpg.add_text("Gyro X: 0.000 dps", tag="gyro_x_text")
+        dpg.add_text("Gyro Y: 0.000 dps", tag="gyro_y_text")
+        dpg.add_text("Gyro Z: 0.000 dps", tag="gyro_z_text")
+
+        dpg.add_separator()
         dpg.add_text("Timing diagnostics:")
         dpg.add_text("Last interval: n/a", tag="sample_interval_text")
+        dpg.add_text("Sequence: n/a", tag="sample_sequence_text")
+        dpg.add_text("Elapsed time: 0.0 s", tag="elapsed_time_text")
 
         dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
@@ -383,16 +468,35 @@ def run_gui():
         with quat_lock:
             status = connection_status
             direction_vec = np.array(current_direction_vec, copy=True)
+            quat_vals = np.array(current_quat, copy=True)
+            euler_vals = np.array(current_euler_deg, copy=True)
+            acc_vals = np.array(current_acc_g, copy=True)
+            gyro_vals = np.array(current_gyro_dps, copy=True)
             vec_x_vals = list(vec_x_hist)
             vec_y_vals = list(vec_y_hist)
             vec_z_vals = list(vec_z_hist)
             time_vals = list(sample_time_hist)
             interval_ms = last_sample_interval_ms
+            seq = sample_index
+            elapsed = elapsed_time_s
 
         dpg.set_value("status_text", status)
         dpg.set_value("vec_x_text", f"X: {direction_vec[0]:7.3f}")
         dpg.set_value("vec_y_text", f"Y: {direction_vec[1]:7.3f}")
         dpg.set_value("vec_z_text", f"Z: {direction_vec[2]:7.3f}")
+        dpg.set_value("quat_w_text", f"Quat w: {quat_vals[0]:7.3f}")
+        dpg.set_value("quat_x_text", f"Quat x: {quat_vals[1]:7.3f}")
+        dpg.set_value("quat_y_text", f"Quat y: {quat_vals[2]:7.3f}")
+        dpg.set_value("quat_z_text", f"Quat z: {quat_vals[3]:7.3f}")
+        dpg.set_value("roll_text", f"Roll (deg):  {euler_vals[0]:7.2f}")
+        dpg.set_value("pitch_text", f"Pitch (deg): {euler_vals[1]:7.2f}")
+        dpg.set_value("yaw_text", f"Yaw (deg):   {euler_vals[2]:7.2f}")
+        dpg.set_value("acc_x_text", f"Accel X: {acc_vals[0]:7.3f} g")
+        dpg.set_value("acc_y_text", f"Accel Y: {acc_vals[1]:7.3f} g")
+        dpg.set_value("acc_z_text", f"Accel Z: {acc_vals[2]:7.3f} g")
+        dpg.set_value("gyro_x_text", f"Gyro X: {gyro_vals[0]:7.3f} dps")
+        dpg.set_value("gyro_y_text", f"Gyro Y: {gyro_vals[1]:7.3f} dps")
+        dpg.set_value("gyro_z_text", f"Gyro Z: {gyro_vals[2]:7.3f} dps")
 
         if interval_ms is None or interval_ms <= 0:
             interval_text = "Last interval: n/a"
@@ -400,6 +504,11 @@ def run_gui():
             rate_hz = 1000.0 / interval_ms if interval_ms > 0 else 0.0
             interval_text = f"Last interval: {interval_ms:6.1f} ms (~{rate_hz:5.1f} Hz)"
         dpg.set_value("sample_interval_text", interval_text)
+        if seq:
+            dpg.set_value("sample_sequence_text", f"Sequence: {seq}")
+        else:
+            dpg.set_value("sample_sequence_text", "Sequence: n/a")
+        dpg.set_value("elapsed_time_text", f"Elapsed time: {elapsed:7.2f} s")
 
         n = len(vec_x_vals)
         if n > 0 and len(time_vals) == n:
@@ -416,6 +525,8 @@ def main():
     args = parse_args()
     configure_logging(args.verbose)
     configure_history_length(args.history_length)
+    global selected_filter_name
+    selected_filter_name = args.filter
 
     LOGGER.info(
         "Starting IMUpen GUI (port=%s, baud=%d, history=%d)",
@@ -426,12 +537,12 @@ def main():
 
     worker = threading.Thread(
         target=serial_worker,
-        args=(args.serial_port, args.baud_rate),
+        args=(args.serial_port, args.baud_rate, selected_filter_name),
         daemon=True,
     )
     worker.start()
     try:
-        run_gui()
+        run_gui(selected_filter_name)
     finally:
         stop_event.set()
         worker.join(timeout=1.0)

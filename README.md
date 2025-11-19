@@ -7,8 +7,8 @@ up of two pieces:
    LSM6DS3TR-C IMU and streams accelerometer/gyroscope samples as binary packets
    over USB.
 2. `xiao_mg24_ahrs_gui.py` – a Python utility that ingests the binary stream,
-   filters it with the Madgwick AHRS algorithm, and visualises the resulting
-   direction vector using DearPyGui.
+   filters it with the Madgwick or UKF AHRS algorithms, and visualises the
+   resulting direction vector using DearPyGui.
 
 The repo now also contains a lightweight CI workflow and a modern `.gitignore`
 to make contributing a little smoother.
@@ -44,7 +44,11 @@ Command-line options:
   `IMUPEN_SERIAL_PORT` (or `COM6`).
 * `--baud-rate` – serial speed; must match the sketch (default `115200`).
 * `--history-length` – number of samples retained for the rolling plot.
+* `--filter` – choose `madgwick` (default) or `ukf` for the host-side AHRS.
 * `-v/--verbose` – enable debug logging.
+
+The GUI displays the live direction vector, quaternion, Euler angles, and raw
+accelerometer/gyroscope values alongside timing diagnostics.
 
 ## Serial packet format
 
@@ -62,7 +66,7 @@ latency and allow the host to recover from framing errors. Each packet contains:
 | `checksum`     | `uint16` | Sum of all previous bytes modulo `2^16`      |
 
 The Python GUI re-syncs to the preamble automatically and validates the checksum
-and version before passing each sample to the Madgwick filter.
+and version before passing each sample to the selected AHRS filter.
 
 ## Development
 
