@@ -20,3 +20,5 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Byte-compile the GUI script
         run: python -m compileall xiao_mg24_ahrs_gui.py
+      - name: Run unit tests
+        run: pytest
