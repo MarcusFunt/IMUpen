@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import queue
 import struct
 import threading
 import time
@@ -53,6 +54,7 @@ first_sample_time_ms: float | None = None
 last_sample_interval_ms: float | None = None
 elapsed_time_s: float = 0.0
 selected_filter_name: str = DEFAULT_FILTER_NAME
+sample_queue: queue.Queue["FilteredSample"] = queue.Queue()
 
 IMU_DRAW_TAG = "imu_drawlist"
 ACC_TRANSLATION_SCALE = 0.05  # how much to move the stick per g of accel
@@ -82,6 +84,19 @@ class ImuPacket(NamedTuple):
     gx_dps: float
     gy_dps: float
     gz_dps: float
+
+
+class FilteredSample(NamedTuple):
+    timestamp_ms: int
+    elapsed_s: float
+    sequence: int
+    quaternion: np.ndarray
+    direction_vec: np.ndarray
+    euler_deg: np.ndarray
+    acc_g: np.ndarray
+    gyro_dps: np.ndarray
+    interval_ms: float
+    reset: bool = False
 
 
 def checksum_bytes(data: bytes) -> int:
@@ -209,6 +224,18 @@ def configure_history_length(length: int) -> None:
     last_sample_interval_ms = None
     first_sample_time_ms = None
     elapsed_time_s = 0.0
+
+
+def flush_sample_queue() -> None:
+    """Remove all pending samples from the playback queue."""
+
+    global sample_queue
+
+    try:
+        while True:
+            sample_queue.get_nowait()
+    except queue.Empty:
+        return
 
 
 def configure_logging(verbose: bool) -> None:
@@ -417,17 +444,33 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
       - opens serial port
       - parses binary packets: sequence, timestamp, accel (g), gyro (deg/s)
       - runs the requested AHRS filter
-      - updates shared orientation state
+      - pushes filtered samples into a thread-safe queue for the GUI thread
     """
-    global connection_status, current_quat, current_direction_vec, sample_index
-    global sample_time_hist, first_sample_time_ms, last_sample_interval_ms
-    global current_euler_deg, current_acc_g, current_gyro_dps, elapsed_time_s
+    global connection_status, first_sample_time_ms, last_sample_interval_ms
+    global sample_queue
 
     filter_runner = create_filter_runner(filter_name)
     filter_label = filter_name.upper()
     q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     last_t_ms = None
     last_sequence = None
+    reset_direction = np.array([0.0, 0.0, -1.0], dtype=float)
+
+    def push_reset_sample(timestamp_ms: int, sequence: int) -> None:
+        sample_queue.put(
+            FilteredSample(
+                timestamp_ms=timestamp_ms,
+                elapsed_s=0.0,
+                sequence=sequence,
+                quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=float),
+                direction_vec=np.array(reset_direction, copy=True),
+                euler_deg=np.array([0.0, 0.0, 0.0], dtype=float),
+                acc_g=np.zeros(3, dtype=float),
+                gyro_dps=np.zeros(3, dtype=float),
+                interval_ms=0.0,
+                reset=True,
+            )
+        )
 
     while not stop_event.is_set():
         try:
@@ -445,6 +488,7 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
         # Clean out any junk
         ser.reset_input_buffer()
         buffer = bytearray()
+        flush_sample_queue()
 
         while not stop_event.is_set():
             try:
@@ -481,6 +525,7 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
                 gy_dps = packet.gy_dps
                 gz_dps = packet.gz_dps
 
+                reset_detected = False
                 if last_sequence is None:
                     status_suffix = ""
                 elif packet.sequence == last_sequence + 1:
@@ -492,6 +537,11 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
                 else:
                     LOGGER.info("Packet sequence reset (device reboot?)")
                     status_suffix = "; sequence reset"
+                    flush_sample_queue()
+                    q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+                    last_t_ms = None
+                    last_sample_interval_ms = None
+                    reset_detected = True
                 last_sequence = packet.sequence
                 status_message = (
                     f"Connected on {serial_port} (seq={packet.sequence}, filter={filter_label})"
@@ -501,6 +551,12 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
                 # LSM6DS3: accel in g, gyro in deg/s -> convert to SI units
                 acc = np.array([ax_g, ay_g, az_g], dtype=float) * 9.80665
                 gyr = np.radians(np.array([gx_dps, gy_dps, gz_dps], dtype=float))
+
+                if reset_detected:
+                    push_reset_sample(t_ms, packet.sequence)
+                    with quat_lock:
+                        connection_status = status_message
+                    continue
 
                 if last_t_ms is None:
                     last_t_ms = t_ms
@@ -512,6 +568,9 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
                     LOGGER.debug("Ignoring non-positive dt=%s", dt)
                     last_t_ms = t_ms
                     first_sample_time_ms = t_ms
+                    flush_sample_queue()
+                    q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+                    push_reset_sample(t_ms, packet.sequence)
                     continue
                 last_t_ms = t_ms
 
@@ -530,17 +589,24 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
 
                 with quat_lock:
                     connection_status = status_message
-                    current_quat = np.array(q, copy=True)
-                    current_direction_vec = np.array(direction_vec, copy=True)
-                    current_euler_deg = np.array(euler_deg, copy=True)
-                    current_acc_g = np.array([ax_g, ay_g, az_g], dtype=float)
-                    current_gyro_dps = np.array([gx_dps, gy_dps, gz_dps], dtype=float)
-                    vec_x_hist.append(direction_vec[0])
-                    vec_y_hist.append(direction_vec[1])
-                    vec_z_hist.append(direction_vec[2])
-                    sample_time_hist.append(elapsed_s)
-                    sample_index = packet.sequence
-                    elapsed_time_s = elapsed_s
+
+                sample_queue.put(
+                    FilteredSample(
+                        timestamp_ms=t_ms,
+                        elapsed_s=elapsed_s,
+                        sequence=packet.sequence,
+                        quaternion=np.array(q, copy=True),
+                        direction_vec=np.array(direction_vec, copy=True),
+                        euler_deg=np.array(euler_deg, copy=True),
+                        acc_g=np.array([ax_g, ay_g, az_g], dtype=float),
+                        gyro_dps=np.array([gx_dps, gy_dps, gz_dps], dtype=float),
+                        interval_ms=dt * 1000.0,
+                        reset=False,
+                    )
+                )
+
+        flush_sample_queue()
+        push_reset_sample(int(time.time() * 1000), 0)
 
         try:
             ser.close()
@@ -668,6 +734,114 @@ def run_gui(filter_name: str):
         "warn": "Retrying",
         "bad": "Dropped",
     }
+
+    playback_queue: deque[FilteredSample] = deque()
+    playback_origin_device_ms: float | None = None
+    playback_origin_host_s: float | None = None
+    last_scheduled_time_ms: float | None = None
+    last_applied_sample: FilteredSample | None = None
+
+    def reset_playback_state() -> None:
+        nonlocal playback_origin_device_ms, playback_origin_host_s
+        nonlocal last_scheduled_time_ms, last_applied_sample
+
+        playback_queue.clear()
+        playback_origin_device_ms = None
+        playback_origin_host_s = None
+        last_scheduled_time_ms = None
+        last_applied_sample = None
+
+    def blend_arrays(a: np.ndarray, b: np.ndarray, alpha: float) -> np.ndarray:
+        return (1.0 - alpha) * a + alpha * b
+
+    def interpolate_samples(
+        s0: FilteredSample, s1: FilteredSample, alpha: float
+    ) -> FilteredSample:
+        blended_quat = blend_arrays(s0.quaternion, s1.quaternion, alpha)
+        norm = np.linalg.norm(blended_quat)
+        if norm > 0:
+            blended_quat = blended_quat / norm
+
+        return FilteredSample(
+            timestamp_ms=int((1.0 - alpha) * s0.timestamp_ms + alpha * s1.timestamp_ms),
+            elapsed_s=(1.0 - alpha) * s0.elapsed_s + alpha * s1.elapsed_s,
+            sequence=s0.sequence if alpha < 0.5 else s1.sequence,
+            quaternion=blended_quat,
+            direction_vec=blend_arrays(s0.direction_vec, s1.direction_vec, alpha),
+            euler_deg=blend_arrays(s0.euler_deg, s1.euler_deg, alpha),
+            acc_g=blend_arrays(s0.acc_g, s1.acc_g, alpha),
+            gyro_dps=blend_arrays(s0.gyro_dps, s1.gyro_dps, alpha),
+            interval_ms=(1.0 - alpha) * s0.interval_ms + alpha * s1.interval_ms,
+            reset=False,
+        )
+
+    def apply_scheduled_sample(target_ms: float) -> None:
+        nonlocal playback_origin_device_ms, playback_origin_host_s
+        nonlocal last_scheduled_time_ms, last_applied_sample
+
+        while True:
+            try:
+                pending = sample_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if pending.reset:
+                reset_playback_state()
+                playback_origin_device_ms = pending.timestamp_ms
+                playback_origin_host_s = time.monotonic()
+
+            playback_queue.append(pending)
+
+        if playback_origin_device_ms is None and playback_queue:
+            playback_origin_device_ms = playback_queue[0].timestamp_ms
+            playback_origin_host_s = time.monotonic()
+
+        if playback_origin_device_ms is None or playback_origin_host_s is None:
+            return
+
+        while playback_queue and playback_queue[0].timestamp_ms <= target_ms:
+            last_applied_sample = playback_queue.popleft()
+
+        next_sample = playback_queue[0] if playback_queue else None
+        scheduled_sample = last_applied_sample or next_sample
+        if scheduled_sample is None:
+            return
+
+        if last_applied_sample and next_sample:
+            denom = max(
+                1e-9, next_sample.timestamp_ms - last_applied_sample.timestamp_ms
+            )
+            alpha = (target_ms - last_applied_sample.timestamp_ms) / denom
+            alpha = float(np.clip(alpha, 0.0, 1.0))
+            scheduled_sample = interpolate_samples(last_applied_sample, next_sample, alpha)
+
+        last_applied_sample = scheduled_sample
+
+        scheduled_elapsed_ms = target_ms - playback_origin_device_ms
+        scheduled_elapsed_s = max(0.0, scheduled_elapsed_ms / 1000.0)
+
+        interval_ms = None
+        if last_scheduled_time_ms is not None:
+            interval_ms = max(0.0, target_ms - last_scheduled_time_ms)
+        last_scheduled_time_ms = target_ms
+
+        with quat_lock:
+            global current_quat, current_direction_vec, current_euler_deg
+            global current_acc_g, current_gyro_dps, sample_index, elapsed_time_s
+            global last_sample_interval_ms
+
+            current_quat = np.array(scheduled_sample.quaternion, copy=True)
+            current_direction_vec = np.array(scheduled_sample.direction_vec, copy=True)
+            current_euler_deg = np.array(scheduled_sample.euler_deg, copy=True)
+            current_acc_g = np.array(scheduled_sample.acc_g, copy=True)
+            current_gyro_dps = np.array(scheduled_sample.gyro_dps, copy=True)
+            vec_x_hist.append(scheduled_sample.direction_vec[0])
+            vec_y_hist.append(scheduled_sample.direction_vec[1])
+            vec_z_hist.append(scheduled_sample.direction_vec[2])
+            sample_time_hist.append(scheduled_elapsed_s)
+            sample_index = scheduled_sample.sequence
+            elapsed_time_s = scheduled_elapsed_s
+            last_sample_interval_ms = interval_ms
 
     dpg.create_viewport(
         title="XIAO MG24 Sense AHRS Viewer",
@@ -830,6 +1004,15 @@ def run_gui(filter_name: str):
         return "warn"
 
     while dpg.is_dearpygui_running():
+        if playback_origin_host_s is None:
+            target_ms = playback_origin_device_ms or 0.0
+        else:
+            target_ms = (
+                (playback_origin_device_ms or 0.0)
+                + (time.monotonic() - playback_origin_host_s) * 1000.0
+            )
+        apply_scheduled_sample(target_ms)
+
         with quat_lock:
             status = connection_status
             direction_vec = np.array(current_direction_vec, copy=True)
