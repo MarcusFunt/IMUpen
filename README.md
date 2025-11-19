@@ -70,10 +70,11 @@ and version before passing each sample to the selected AHRS filter.
 
 ## Development
 
-* Format and linting is intentionally lightweight; CI simply ensures that the
-  Python files compile with the current interpreter.
-* Run `python -m compileall xiao_mg24_ahrs_gui.py` locally before committing to
-  mirror the CI check.
+* Format and linting is intentionally lightweight; CI ensures that the
+  Python files compile and that the core utilities keep passing their unit
+  tests.
+* Run `python -m compileall xiao_mg24_ahrs_gui.py` and `pytest` locally before
+  committing to mirror the CI checks.
 
 ## License
 
