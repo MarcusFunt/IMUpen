@@ -302,10 +302,24 @@ def quat_to_direction_vector(q, base_vector=None):
     return rot @ base_vector
 
 
+def sanitize_quaternion(q: np.ndarray) -> np.ndarray:
+    """Return a finite, normalized quaternion with a sensible fallback."""
+
+    cleaned = np.array(q, dtype=float)
+    if not np.all(np.isfinite(cleaned)):
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+    norm = np.linalg.norm(cleaned)
+    if norm <= 1e-9:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+    return cleaned / norm
+
+
 def quat_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
     """Return the 3x3 rotation matrix for quaternion ``q``."""
 
-    w, x, y, z = q
+    w, x, y, z = sanitize_quaternion(q)
     return np.array(
         [
             [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -579,6 +593,8 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
                 if q is None:
                     LOGGER.debug("Filter update returned None")
                     continue
+
+                q = sanitize_quaternion(q)
 
                 direction_vec = quat_to_direction_vector(q)
                 euler_deg = quat_to_euler_degrees(q)
