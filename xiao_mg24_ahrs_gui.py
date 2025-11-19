@@ -409,6 +409,61 @@ def run_gui(filter_name: str):
     """
 
     dpg.create_context()
+
+    # Typeface + colour palette shared across the widgets to give a subtle
+    # "brand" identity without altering any data handling logic.
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    with dpg.font_registry():
+        default_font = dpg.add_font(font_path, 16)
+    dpg.bind_font(default_font)
+
+    header_color = (0, 186, 188, 255)
+    separator_color = (0, 90, 100, 255)
+    plot_line_color = (255, 145, 0, 255)
+    plot_fill_color = (0, 186, 188, 64)
+
+    with dpg.theme() as branded_theme:
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_color(
+                dpg.mvThemeCol_Header, header_color, category=dpg.mvThemeCat_Core
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_HeaderActive,
+                (0, 150, 155, 255),
+                category=dpg.mvThemeCat_Core,
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_HeaderHovered,
+                (0, 200, 205, 255),
+                category=dpg.mvThemeCat_Core,
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_Separator,
+                separator_color,
+                category=dpg.mvThemeCat_Core,
+            )
+        with dpg.theme_component(dpg.mvPlot):
+            dpg.add_theme_color(
+                dpg.mvThemeCol_PlotLines,
+                plot_line_color,
+                category=dpg.mvThemeCat_Plots,
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_PlotLinesHovered,
+                (255, 180, 80, 255),
+                category=dpg.mvThemeCat_Plots,
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_PlotBorder,
+                separator_color,
+                category=dpg.mvThemeCat_Plots,
+            )
+            dpg.add_theme_color(
+                dpg.mvThemeCol_PlotFill,
+                plot_fill_color,
+                category=dpg.mvThemeCat_Plots,
+            )
+    dpg.bind_theme(branded_theme)
     dpg.create_viewport(
         title="XIAO MG24 Sense AHRS Viewer",
         width=900,
@@ -466,9 +521,19 @@ def run_gui(filter_name: str):
             )
             dpg.set_axis_limits("y_axis", -1.2, 1.2)
 
-            dpg.add_line_series([], [], label="X", parent=y_axis, tag="vec_x_series")
-            dpg.add_line_series([], [], label="Y", parent=y_axis, tag="vec_y_series")
-            dpg.add_line_series([], [], label="Z", parent=y_axis, tag="vec_z_series")
+            vec_x_color = (0, 186, 188, 255)
+            vec_y_color = (0, 120, 155, 255)
+            vec_z_color = (255, 145, 0, 255)
+
+            dpg.add_line_series(
+                [], [], label="X", parent=y_axis, tag="vec_x_series", color=vec_x_color
+            )
+            dpg.add_line_series(
+                [], [], label="Y", parent=y_axis, tag="vec_y_series", color=vec_y_color
+            )
+            dpg.add_line_series(
+                [], [], label="Z", parent=y_axis, tag="vec_z_series", color=vec_z_color
+            )
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
