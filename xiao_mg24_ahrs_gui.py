@@ -390,10 +390,33 @@ def update_imu_visual(quat_vals: np.ndarray, acc_vals: np.ndarray) -> None:
         return
 
     width, height = dpg.get_item_rect_size(IMU_DRAW_TAG)
+    if width <= 1 or height <= 1:
+        parent = dpg.get_item_parent(IMU_DRAW_TAG)
+        if parent:
+            parent_width, parent_height = dpg.get_item_rect_size(parent)
+            if parent_width > 1:
+                width = parent_width
+            if parent_height > 1:
+                height = min(parent_height, height if height > 1 else parent_height)
+        if width <= 1:
+            width = 320.0
+        if height <= 1:
+            height = 220.0
+
+    dpg.configure_item(IMU_DRAW_TAG, width=width, height=height)
     rotation = quat_to_rotation_matrix(quat_vals)
     translation = accelerometer_to_translation(acc_vals)
 
     dpg.delete_item(IMU_DRAW_TAG, children_only=True)
+
+    dpg.draw_rectangle(
+        (0.0, 0.0),
+        (width, height),
+        color=(80, 80, 80, 90),
+        fill=(15, 15, 20, 140),
+        thickness=1.0,
+        parent=IMU_DRAW_TAG,
+    )
 
     body_points = transform_model_points(IMU_BODY_POINTS, rotation, translation)
     body_projected = project_points(body_points, width, height)
