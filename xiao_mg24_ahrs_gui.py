@@ -530,6 +530,16 @@ def run_gui(filter_name: str):
                 )
         return theme
 
+    def make_line_series_theme(color: tuple[int, int, int, int]):
+        """Return a theme that applies ``color`` to a line series."""
+
+        with dpg.theme() as theme:
+            with dpg.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_color(
+                    dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots
+                )
+        return theme
+
     status_themes = {
         "good": make_status_theme((0, 200, 0, 255)),
         "warn": make_status_theme((220, 180, 0, 255)),
@@ -663,14 +673,18 @@ def run_gui(filter_name: str):
             vec_z_color = (255, 145, 0, 255)
 
             dpg.add_line_series(
-                [], [], label="X", parent=y_axis, tag="vec_x_series", color=vec_x_color
+                [], [], label="X", parent=y_axis, tag="vec_x_series"
             )
             dpg.add_line_series(
-                [], [], label="Y", parent=y_axis, tag="vec_y_series", color=vec_y_color
+                [], [], label="Y", parent=y_axis, tag="vec_y_series"
             )
             dpg.add_line_series(
-                [], [], label="Z", parent=y_axis, tag="vec_z_series", color=vec_z_color
+                [], [], label="Z", parent=y_axis, tag="vec_z_series"
             )
+
+            dpg.bind_item_theme("vec_x_series", make_line_series_theme(vec_x_color))
+            dpg.bind_item_theme("vec_y_series", make_line_series_theme(vec_y_color))
+            dpg.bind_item_theme("vec_z_series", make_line_series_theme(vec_z_color))
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
