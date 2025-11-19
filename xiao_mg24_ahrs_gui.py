@@ -54,6 +54,22 @@ last_sample_interval_ms: float | None = None
 elapsed_time_s: float = 0.0
 selected_filter_name: str = DEFAULT_FILTER_NAME
 
+IMU_DRAW_TAG = "imu_drawlist"
+ACC_TRANSLATION_SCALE = 0.05  # how much to move the stick per g of accel
+ACC_TRANSLATION_LIMIT = 0.8  # clamp translation to keep the model visible
+IMU_BODY_POINTS = np.array(
+    [
+        [0.0, 0.0, -0.7],
+        [0.0, 0.0, 0.7],
+    ],
+    dtype=float,
+)
+IMU_AXIS_POINTS = {
+    "x": np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]], dtype=float),
+    "y": np.array([[0.0, 0.0, 0.0], [0.0, 0.5, 0.0]], dtype=float),
+    "z": np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.5]], dtype=float),
+}
+
 stop_event = threading.Event()
 
 
@@ -259,6 +275,20 @@ def quat_to_direction_vector(q, base_vector=None):
     return rot @ base_vector
 
 
+def quat_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
+    """Return the 3x3 rotation matrix for quaternion ``q``."""
+
+    w, x, y, z = q
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
+
+
 def quat_to_euler_degrees(q: np.ndarray) -> np.ndarray:
     """Convert quaternion ``q`` into roll/pitch/yaw (degrees)."""
 
@@ -277,6 +307,88 @@ def quat_to_euler_degrees(q: np.ndarray) -> np.ndarray:
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     yaw = np.arctan2(siny_cosp, cosy_cosp)
     return np.degrees([roll, pitch, yaw])
+
+
+def accelerometer_to_translation(acc_vals: np.ndarray) -> np.ndarray:
+    """Convert accelerometer readings (g) to a translation vector for the model."""
+
+    scaled = np.array(acc_vals, dtype=float) * ACC_TRANSLATION_SCALE
+    return np.clip(scaled, -ACC_TRANSLATION_LIMIT, ACC_TRANSLATION_LIMIT)
+
+
+def transform_model_points(
+    points: np.ndarray, rotation: np.ndarray, translation: np.ndarray
+) -> np.ndarray:
+    """Apply rotation + translation to ``points`` and return transformed copy."""
+
+    return points @ rotation.T + translation
+
+
+def project_points(points: np.ndarray, width: float, height: float) -> np.ndarray:
+    """Project 3D ``points`` into 2D viewport coordinates."""
+
+    if width <= 0 or height <= 0:
+        width = 300.0
+        height = 200.0
+
+    fov_rad = np.radians(60.0)
+    scale = 0.5 * min(width, height) / np.tan(fov_rad / 2.0)
+    projected: list[tuple[float, float]] = []
+    for x, y, z in points:
+        z_cam = max(z + 3.0, 0.1)
+        x_proj = (x / z_cam) * scale + width / 2.0
+        y_proj = height / 2.0 - (y / z_cam) * scale
+        projected.append((x_proj, y_proj))
+    return np.array(projected, dtype=float)
+
+
+def update_imu_visual(quat_vals: np.ndarray, acc_vals: np.ndarray) -> None:
+    """Update the DearPyGui drawlist that shows the IMU stick."""
+
+    if not dpg.does_item_exist(IMU_DRAW_TAG):
+        return
+
+    width, height = dpg.get_item_rect_size(IMU_DRAW_TAG)
+    rotation = quat_to_rotation_matrix(quat_vals)
+    translation = accelerometer_to_translation(acc_vals)
+
+    dpg.delete_item(IMU_DRAW_TAG, children_only=True)
+
+    body_points = transform_model_points(IMU_BODY_POINTS, rotation, translation)
+    body_projected = project_points(body_points, width, height)
+    dpg.draw_line(
+        body_projected[0],
+        body_projected[1],
+        color=(0, 186, 188, 220),
+        thickness=6.0,
+        parent=IMU_DRAW_TAG,
+    )
+
+    axis_colors = {
+        "x": (255, 95, 95, 255),
+        "y": (120, 220, 120, 255),
+        "z": (90, 170, 255, 255),
+    }
+    for axis, pts in IMU_AXIS_POINTS.items():
+        transformed = transform_model_points(pts, rotation, translation)
+        projected = project_points(transformed, width, height)
+        dpg.draw_line(
+            projected[0],
+            projected[1],
+            color=axis_colors.get(axis, (255, 255, 255, 255)),
+            thickness=2.0,
+            parent=IMU_DRAW_TAG,
+        )
+
+    pivot = transform_model_points(np.array([[0.0, 0.0, 0.0]], dtype=float), rotation, translation)
+    pivot_projected = project_points(pivot, width, height)[0]
+    dpg.draw_circle(
+        center=pivot_projected,
+        radius=6.0,
+        color=(255, 255, 255, 120),
+        fill=(0, 0, 0, 60),
+        parent=IMU_DRAW_TAG,
+    )
 
 
 def create_filter_runner(filter_name: str) -> Callable[[np.ndarray, np.ndarray, np.ndarray, float], np.ndarray | None]:
@@ -659,6 +771,15 @@ def run_gui(filter_name: str):
                     ]
                 )
 
+        with dpg.child_window(label="IMU 3D View", width=-1, height=260):
+            dpg.add_text("IMU pose (accelerometer offset + roll/pitch/yaw)")
+            dpg.add_spacer(height=4)
+            dpg.add_drawlist(
+                width=-1,
+                height=210,
+                tag=IMU_DRAW_TAG,
+            )
+
         dpg.add_separator()
         dpg.add_text(f"History (last ~{HISTORY_LENGTH} samples)")
 
@@ -741,6 +862,7 @@ def run_gui(filter_name: str):
         dpg.set_value("gyro_x_text", f"{gyro_vals[0]:7.3f}")
         dpg.set_value("gyro_y_text", f"{gyro_vals[1]:7.3f}")
         dpg.set_value("gyro_z_text", f"{gyro_vals[2]:7.3f}")
+        update_imu_visual(quat_vals, acc_vals)
 
         if interval_ms is None or interval_ms <= 0:
             interval_text = "n/a"
