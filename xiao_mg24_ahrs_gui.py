@@ -292,7 +292,17 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
 
         while not stop_event.is_set():
             try:
-                chunk = ser.read(ser.in_waiting or PACKET_SIZE)
+                bytes_waiting = ser.in_waiting
+                # ``ser.read(0)`` returns immediately without fetching any data which
+                # would make the loop spin aggressively.  Previously we requested a
+                # whole packet when nothing was waiting which meant that the read
+                # call would block until an entire packet had arrived, effectively
+                # delivering samples to the GUI in noticeable bursts.  By always
+                # requesting at least one byte we allow the OS driver to deliver
+                # data as soon as it becomes available which keeps the updates
+                # flowing smoothly while still avoiding a hot loop.
+                chunk_size = bytes_waiting if bytes_waiting > 0 else 1
+                chunk = ser.read(chunk_size)
             except serial.SerialException as e:
                 LOGGER.error("Serial read error: %s", e)
                 with quat_lock:
