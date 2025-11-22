@@ -56,6 +56,10 @@ elapsed_time_s: float = 0.0
 selected_filter_name: str = DEFAULT_FILTER_NAME
 sample_queue: queue.Queue["FilteredSample"] = queue.Queue()
 
+# New global queue used to send commands from the GUI to the serial worker.
+command_queue: queue.Queue[str] = queue.Queue()
+
+
 IMU_DRAW_TAG = "imu_drawlist"
 ACC_TRANSLATION_SCALE = 0.05  # how much to move the stick per g of accel
 ACC_TRANSLATION_LIMIT = 0.8  # clamp translation to keep the model visible
@@ -475,13 +479,15 @@ def create_filter_runner(filter_name: str) -> Callable[[np.ndarray, np.ndarray, 
     return run
 
 
-def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
+def serial_worker(serial_port: str, baud_rate: int, filter_name: str, cmd_queue: queue.Queue[str] | None = None):
     """
     Background thread:
       - opens serial port
       - parses binary packets: sequence, timestamp, accel (g), gyro (deg/s)
       - runs the requested AHRS filter
       - pushes filtered samples into a thread-safe queue for the GUI thread
+      - writes outbound control commands (sample period, buffer length) from
+        ``cmd_queue`` to the device.
     """
     global connection_status, first_sample_time_ms, last_sample_interval_ms
     global sample_queue
@@ -529,6 +535,17 @@ def serial_worker(serial_port: str, baud_rate: int, filter_name: str):
 
         while not stop_event.is_set():
             try:
+                # send any queued commands to the device
+                if cmd_queue is not None:
+                    try:
+                        while True:
+                            cmd = cmd_queue.get_nowait()
+                            # send command as ASCII followed by newline
+                            if cmd:
+                                ser.write(cmd.encode("utf-8") + b"\n")
+                    except queue.Empty:
+                        pass
+
                 bytes_waiting = ser.in_waiting
                 # ``ser.read(0)`` returns immediately without fetching any data which
                 # would make the loop spin aggressively.  Previously we requested a
@@ -667,6 +684,7 @@ def run_gui(filter_name: str):
       - displays connection status
       - shows the current direction vector
       - plots recent history
+      - provides controls for adjusting the sampling interval and history length
     """
 
     dpg.create_context()
@@ -984,6 +1002,46 @@ def run_gui(filter_name: str):
                     ]
                 )
 
+            # New configuration panel: allows adjusting the sampling period and history length
+            with dpg.child_window(label="Configuration", width=250, height=200):
+                dpg.add_text("Controls")
+                # Callback to update sampling period on the device
+                def on_sample_period_change(sender, app_data, user_data):
+                    try:
+                        value = int(app_data)
+                        if value > 0:
+                            # send command to device
+                            command_queue.put(f"PERIOD{value}")
+                    except Exception:
+                        pass
+                # Callback to update history length both on host and device
+                def on_history_length_change(sender, app_data, user_data):
+                    try:
+                        value = int(app_data)
+                        if value < 1:
+                            value = 1
+                        configure_history_length(value)
+                        # send command to device
+                        command_queue.put(f"BUFFER{value}")
+                    except Exception:
+                        pass
+                dpg.add_input_int(
+                    label="Sample period (ms)",
+                    default_value=int(1000.0 / PACKET_RATE_TARGET_HZ),
+                    min_value=1,
+                    max_value=1000,
+                    callback=on_sample_period_change,
+                    width=140,
+                )
+                dpg.add_input_int(
+                    label="History length",
+                    default_value=HISTORY_LENGTH,
+                    min_value=1,
+                    max_value=10000,
+                    callback=on_history_length_change,
+                    width=140,
+                )
+
         with dpg.child_window(label="IMU 3D View", width=-1, height=260):
             dpg.add_text("IMU pose (accelerometer offset + roll/pitch/yaw)")
             dpg.add_spacer(height=4)
@@ -1141,9 +1199,11 @@ def main():
         HISTORY_LENGTH,
     )
 
+    # Launch the serial worker thread and pass the command queue so outbound
+    # commands issued from the GUI can reach the microcontroller.
     worker = threading.Thread(
         target=serial_worker,
-        args=(args.serial_port, args.baud_rate, selected_filter_name),
+        args=(args.serial_port, args.baud_rate, selected_filter_name, command_queue),
         daemon=True,
     )
     worker.start()
