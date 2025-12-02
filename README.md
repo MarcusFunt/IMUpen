@@ -50,6 +50,21 @@ Command-line options:
 The GUI displays the live direction vector, quaternion, Euler angles, and raw
 accelerometer/gyroscope values alongside timing diagnostics.
 
+## Parakeet-TDT ASR Demo
+
+The repository also includes a small DearPyGui-based demo for
+[`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
+NVIDIA's automatic speech recognition model.
+
+Run the demo on a short WAV/FLAC clip:
+
+```bash
+python parakeet_tdt_demo.py
+```
+
+Use the **Open Audio** button to choose a file from disk and the transcript will
+appear inside the GUI once the model finishes processing.
+
 ## Serial packet format
 
 The sketch emits fixed-length, 38-byte, little-endian packets to minimise
