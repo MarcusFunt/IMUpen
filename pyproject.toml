@@ -5,18 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "imupen-smartpen"
 version = "0.1.0"
-description = "Seeed XIAO ESP32-S3 + LSM6DS3 personalized handwriting recorder"
+description = "Seeed XIAO ESP32-S3 handwriting recorder and six-axis CTC recognizer"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pyserial>=3.5"]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "torch>=2.2,<3"]
 gui = ["PySide6>=6.6"]
+ml = ["torch>=2.2,<3"]
 
 [project.scripts]
 smartpen-collect = "smartpen.collector.cli:main"
 smartpen-replay = "smartpen.collector.replay:main"
 smartpen-gui = "smartpen.collector.gui:main"
+smartpen-hwr = "smartpen.hwr.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["smartpen*"]

@@ -18,6 +18,7 @@ __pycache__/
 
 # New smartpen data is personal and potentially large
 /datasets/
+/runs/
 /firmware/.pio/
 /firmware/.vscode/
 *.npz
