@@ -59,14 +59,14 @@ Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instr
 - Versioned, CRC16-checked binary USB frames with sample sequence counters and error telemetry.
 - Prompted Python terminal and optional PySide6 graphical recording tools.
 - Immutable raw binary streams and decoded NumPy arrays, plus JSON metadata and JSONL manifests.
-- Optional six-axis CNN-BiLSTM-CTC baseline and residual CNN-BiLSTM-CTC handwriting recognition with OnHW-Words500 training, held-out writer evaluation, and CER/WER reporting.
+- Optional six-axis CNN-BiLSTM-CTC baseline, residual CNN-BiLSTM-CTC model, and OnHW-to-personal encoder fine-tuning with session-held-out CER/WER reporting.
 - Host unit tests and GitHub Actions Python/firmware builds.
 
 **Not yet implemented:** live plots, sensor calibration or automatic pen-contact detection.
 
-## Handwriting recognition (M4/M5)
+## Handwriting recognition (M4/M5/M6-A)
 
-The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, and [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture and a reproducible side-by-side comparison. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
+The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, and [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for OnHW pretraining and personal-session fine-tuning. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
 
 ## Hardware validation
 

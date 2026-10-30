@@ -4,6 +4,8 @@ from __future__ import annotations
 import pickle
 import zipfile
 import importlib
+import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -15,6 +17,7 @@ import numpy as np
 # token in the author-provided labels and becomes the CTC blank class.
 ONHW_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄÖÜäöüß"
 ONHW_BLANK_INDEX = len(ONHW_CHARSET)
+PERSONAL_CHARSET = ONHW_CHARSET + "ÆØÅæøå 0123456789.,!?;:'\"()-"
 ONHW_SENSOR_CHANNELS = 13
 ONHW_SIX_AXIS_COLUMNS = (0, 1, 2, 6, 7, 8)  # front accel xyz, gyro xyz
 
@@ -23,8 +26,10 @@ ONHW_SIX_AXIS_COLUMNS = (0, 1, 2, 6, 7, 8)  # front accel xyz, gyro xyz
 class SequenceRecord:
     features: np.ndarray
     text: str
-    writer_id: int
+    writer_id: int | str
     sample_index: int = 0
+    session_id: str | None = None
+    sample_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,20 @@ class OnHWFold:
     @property
     def validation_writers(self) -> set[int]:
         return {record.writer_id for record in self.validation}
+
+
+@dataclass(frozen=True)
+class PersonalRecordings:
+    records: list[SequenceRecord]
+    rejected_recordings: int
+
+
+@dataclass(frozen=True)
+class PersonalSessionSplit:
+    train: list[SequenceRecord]
+    validation: list[SequenceRecord]
+    train_sessions: frozenset[tuple[str, str]]
+    validation_sessions: frozenset[tuple[str, str]]
 
 
 class _NumpyOnlyUnpickler(pickle.Unpickler):
@@ -103,13 +122,141 @@ def decode_onhw_label(padded_tokens: list[int] | tuple[int, ...]) -> str:
     return "".join(ONHW_CHARSET[token] for token in tokens)
 
 
-def encode_text(text: str) -> list[int]:
-    """Encode text using the OnHW-Words500 character order."""
-    index = {character: token for token, character in enumerate(ONHW_CHARSET)}
+def validate_charset(charset: str) -> str:
+    """Validate a character set whose final CTC class will be the blank."""
+    if not charset:
+        raise ValueError("charset must contain at least one character")
+    if len(set(charset)) != len(charset):
+        raise ValueError("charset must not contain duplicate characters")
+    if any(character.isspace() and character != " " for character in charset):
+        raise ValueError("charset may contain a regular space, not other whitespace")
+    return charset
+
+
+def encode_text(text: str, charset: str = ONHW_CHARSET) -> list[int]:
+    """Encode text using the requested character order (OnHW by default)."""
+    charset = validate_charset(charset)
+    index = {character: token for token, character in enumerate(charset)}
     try:
         return [index[character] for character in text]
     except KeyError as exc:
-        raise ValueError(f"character {exc.args[0]!r} is outside the OnHW charset") from exc
+        raise ValueError(f"character {exc.args[0]!r} is outside the configured charset") from exc
+
+
+def load_personal_recordings(
+    root: str | Path, charset: str = PERSONAL_CHARSET
+) -> PersonalRecordings:
+    """Load accepted recordings produced by :class:`RecordingStore`.
+
+    Metadata is the commit marker. Arrays are loaded with ``allow_pickle=False``
+    and paths are constrained to the recording root. Rejected samples are
+    counted and ignored.
+    """
+    charset = validate_charset(charset)
+    root_path = Path(root).resolve()
+    metadata_paths = sorted((root_path / "metadata").rglob("*.json"))
+    if not metadata_paths:
+        raise FileNotFoundError(f"no recorder metadata found below {root_path / 'metadata'}")
+
+    records: list[SequenceRecord] = []
+    sample_ids: set[str] = set()
+    rejected = 0
+    for sample_index, metadata_path in enumerate(metadata_paths):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid recording metadata: {metadata_path}") from exc
+        if not isinstance(metadata, dict):
+            raise ValueError(f"recording metadata must be an object: {metadata_path}")
+        accepted = metadata.get("accepted")
+        if not isinstance(accepted, bool):
+            raise ValueError(f"recording metadata has no boolean accepted flag: {metadata_path}")
+        if not accepted:
+            rejected += 1
+            continue
+
+        sample_id = str(metadata.get("sample_id", "")).strip()
+        writer_id = str(metadata.get("writer_id", "")).strip()
+        session_id = str(metadata.get("session_id", "")).strip()
+        text = unicodedata.normalize("NFC", str(metadata.get("prompt", "")).strip())
+        array_file = metadata.get("array_file")
+        if not sample_id or not writer_id or not session_id or not text or not array_file:
+            raise ValueError(f"accepted recording metadata is incomplete: {metadata_path}")
+        if sample_id in sample_ids:
+            raise ValueError(f"duplicate sample_id in recording metadata: {sample_id}")
+        sample_ids.add(sample_id)
+        encode_text(text, charset)
+
+        relative_array = Path(str(array_file))
+        if relative_array.is_absolute():
+            raise ValueError(f"recording array path must be relative: {array_file}")
+        array_path = (root_path / relative_array).resolve()
+        if not array_path.is_relative_to(root_path):
+            raise ValueError(f"recording array path escapes dataset root: {array_file}")
+        if not array_path.is_file():
+            raise FileNotFoundError(array_path)
+        try:
+            with np.load(array_path, allow_pickle=False) as archive:
+                if "axes" not in archive:
+                    raise ValueError(f"recording array has no axes channel: {array_path}")
+                features = select_six_axis(archive["axes"])
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise ValueError(f"invalid recorder array file: {array_path}") from exc
+        if len(features) == 0:
+            raise ValueError(f"accepted recording contains no samples: {sample_id}")
+        if not np.isfinite(features).all():
+            raise ValueError(f"recording contains non-finite IMU values: {sample_id}")
+        if "sample_count" in metadata and int(metadata["sample_count"]) != len(features):
+            raise ValueError(f"recording sample count does not match its array: {sample_id}")
+        records.append(
+            SequenceRecord(
+                features=features,
+                text=text,
+                writer_id=writer_id,
+                sample_index=sample_index,
+                session_id=session_id,
+                sample_id=sample_id,
+            )
+        )
+    if not records:
+        raise ValueError("recording set contains no accepted labeled recordings")
+    return PersonalRecordings(records=records, rejected_recordings=rejected)
+
+
+def split_personal_by_session(
+    records: list[SequenceRecord],
+    *,
+    validation_fraction: float = 0.2,
+    seed: int = 1337,
+) -> PersonalSessionSplit:
+    """Create a deterministic split that keeps each writer/session group intact."""
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between 0 and 1")
+    session_groups: dict[tuple[str, str], list[SequenceRecord]] = {}
+    for record in records:
+        if record.session_id is None:
+            raise ValueError("personal records must include a session_id")
+        group = (str(record.writer_id), record.session_id)
+        session_groups.setdefault(group, []).append(record)
+    sessions = sorted(session_groups)
+    if len(sessions) < 2:
+        raise ValueError("at least two accepted writer/session groups are required")
+
+    validation_count = min(max(round(len(sessions) * validation_fraction), 1), len(sessions) - 1)
+    rng = np.random.default_rng(seed)
+    selected = rng.permutation(len(sessions))[:validation_count]
+    validation_sessions = frozenset(sessions[int(index)] for index in selected)
+    train_sessions = frozenset(set(sessions) - validation_sessions)
+    train = [record for record in records if (str(record.writer_id), record.session_id) in train_sessions]
+    validation = [record for record in records if (str(record.writer_id), record.session_id) in validation_sessions]
+    if not train or not validation:
+        raise ValueError("session split must leave training and validation recordings")
+    return PersonalSessionSplit(
+        train=train,
+        validation=validation,
+        train_sessions=train_sessions,
+        validation_sessions=validation_sessions,
+    )
 
 
 def _resolve_directory_files(root: Path, fold: int) -> tuple[dict[str, Path], str]:

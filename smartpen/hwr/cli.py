@@ -5,7 +5,9 @@ import argparse
 import json
 from pathlib import Path
 
+from smartpen.hwr.data import PERSONAL_CHARSET
 from smartpen.hwr.model import MODEL_TYPES
+from smartpen.hwr.personal import run_onhw_encoder_pretraining, run_personal_comparison
 from smartpen.hwr.training import evaluate_checkpoint, run_comparison, run_training
 
 
@@ -23,6 +25,33 @@ def _parser() -> argparse.ArgumentParser:
         "compare", help="train M4 and M5 with identical data and optimization settings"
     )
     _add_training_arguments(compare)
+
+    pretrain = commands.add_parser(
+        "pretrain", help="pretrain the M5 encoder on the licensed OnHW dataset"
+    )
+    _add_training_arguments(pretrain)
+
+    personalize = commands.add_parser(
+        "personalize",
+        help="compare OnHW encoder fine-tuning with training from scratch on recorder data",
+    )
+    personalize.add_argument("--recordings", required=True, help="RecordingStore output root")
+    personalize.add_argument("--pretrained-checkpoint", required=True)
+    personalize.add_argument("--output", required=True, help="directory for split, checkpoints, and metrics")
+    personalize.add_argument("--charset", default=PERSONAL_CHARSET)
+    personalize.add_argument("--validation-fraction", type=float, default=0.2)
+    personalize.add_argument("--split-manifest", help="reuse an existing session_split.json")
+    personalize.add_argument("--epochs", type=int, default=20)
+    personalize.add_argument("--batch-size", type=int, default=16)
+    personalize.add_argument("--seed", type=int, default=1337)
+    personalize.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    personalize.add_argument("--num-threads", type=int, default=4)
+    personalize.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="use CUDA float16 autocast (defaults to enabled on CUDA)",
+    )
 
     evaluate = commands.add_parser("evaluate", help="evaluate a saved model on the held-out fold")
     evaluate.add_argument("--data", required=True, help="official OnHW ZIP or extracted folder")
@@ -92,6 +121,41 @@ def main() -> None:
             device_name=args.device,
             max_train_samples=args.max_train_samples,
             max_validation_samples=args.max_validation_samples,
+            num_threads=args.num_threads,
+            mixed_precision=args.mixed_precision,
+        )
+        print(json.dumps(comparison, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "pretrain":
+        report = run_onhw_encoder_pretraining(
+            data_path=args.data,
+            output_dir=args.output,
+            fold=args.fold,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            device_name=args.device,
+            max_train_samples=args.max_train_samples,
+            max_validation_samples=args.max_validation_samples,
+            num_threads=args.num_threads,
+            mixed_precision=args.mixed_precision,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "personalize":
+        comparison = run_personal_comparison(
+            recordings_dir=args.recordings,
+            pretrained_checkpoint=args.pretrained_checkpoint,
+            output_dir=args.output,
+            charset=args.charset,
+            validation_fraction=args.validation_fraction,
+            split_manifest_path=args.split_manifest,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            device_name=args.device,
             num_threads=args.num_threads,
             mixed_precision=args.mixed_precision,
         )
