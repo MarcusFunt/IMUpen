@@ -261,17 +261,26 @@ def count_parameters(model: nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
 
 
-def ctc_greedy_decode(tokens: Sequence[int], blank_index: int = 59) -> str:
-    """Collapse consecutive CTC tokens and remove blanks using OnHW charset."""
-    from smartpen.hwr.data import ONHW_CHARSET
+def ctc_greedy_decode(
+    tokens: Sequence[int],
+    blank_index: int = 59,
+    charset: str | None = None,
+) -> str:
+    """Collapse repeated CTC tokens and remove blanks using a given charset."""
+    if charset is None:
+        from smartpen.hwr.data import ONHW_CHARSET
+
+        charset = ONHW_CHARSET
+    if blank_index != len(charset):
+        raise ValueError("CTC blank index must follow the last charset symbol")
 
     characters: list[str] = []
     previous: int | None = None
     for raw_token in tokens:
         token = int(raw_token)
         if token != previous and token != blank_index:
-            if token < 0 or token >= len(ONHW_CHARSET):
+            if token < 0 or token >= len(charset):
                 raise ValueError(f"CTC token out of range: {token}")
-            characters.append(ONHW_CHARSET[token])
+            characters.append(charset[token])
         previous = token
     return "".join(characters)

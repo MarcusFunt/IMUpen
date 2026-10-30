@@ -58,6 +58,8 @@ The repository's `reports/onhw_fold0_sample.json` records a real one-epoch CPU t
 
 M5 preserves this baseline and adds a residual CNN-BiLSTM-CTC alternative. Use `python -m smartpen.hwr.cli compare` to train both models with identical fold, seed, sample indexes, and optimization settings; see [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md).
 
+M6-A uses an OnHW-trained M5 encoder to initialize fine-tuning on accepted personal recorder recordings, then compares that run with personal training from scratch on the same session-held-out split. See [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for the workflow and data requirements.
+
 | Fold | Seed | Train / validation samples | Epochs | CER | WER |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 0, writer-independent | 2026 | 64 / 64 | 1 | 94.03% (299 / 318 characters) | 100% (64 / 64 words) |

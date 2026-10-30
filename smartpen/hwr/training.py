@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from smartpen.hwr.data import (
     ONHW_BLANK_INDEX,
+    ONHW_CHARSET,
     OnHWFold,
     SequenceRecord,
     encode_text,
@@ -61,10 +62,12 @@ def _ctc_minimum_frames(tokens: Sequence[int]) -> int:
     return len(tokens) + sum(left == right for left, right in zip(tokens, tokens[1:]))
 
 
-def keep_ctc_feasible(records: Sequence[SequenceRecord]) -> tuple[list[SequenceRecord], int]:
+def keep_ctc_feasible(
+    records: Sequence[SequenceRecord], charset: str = ONHW_CHARSET
+) -> tuple[list[SequenceRecord], int]:
     kept = []
     for record in records:
-        tokens = encode_text(record.text)
+        tokens = encode_text(record.text, charset)
         if encoded_length(len(record.features)) >= _ctc_minimum_frames(tokens):
             kept.append(record)
     return kept, len(records) - len(kept)
@@ -138,12 +141,12 @@ class _LengthBucketBatchSampler(Sampler[list[int]]):
         return (len(self.records) + self.batch_size - 1) // self.batch_size
 
 
-def _collate_records(mean: np.ndarray, std: np.ndarray):
+def _collate_records(mean: np.ndarray, std: np.ndarray, charset: str = ONHW_CHARSET):
     def collate(records: list[SequenceRecord]) -> dict[str, torch.Tensor | list]:
         lengths = torch.tensor([len(record.features) for record in records], dtype=torch.long)
         max_length = int(lengths.max())
         inputs = torch.zeros((len(records), max_length, 6), dtype=torch.float32)
-        token_sequences = [encode_text(record.text) for record in records]
+        token_sequences = [encode_text(record.text, charset) for record in records]
         targets = torch.tensor(
             [token for sequence in token_sequences for token in sequence], dtype=torch.long
         )
@@ -173,12 +176,13 @@ def _loader(
     seed: int,
     mean: np.ndarray,
     std: np.ndarray,
+    charset: str = ONHW_CHARSET,
 ) -> tuple[DataLoader, _LengthBucketBatchSampler]:
     sampler = _LengthBucketBatchSampler(records, batch_size, seed)
     loader = DataLoader(
         _RecordDataset(records),
         batch_sampler=sampler,
-        collate_fn=_collate_records(mean, std),
+        collate_fn=_collate_records(mean, std, charset),
         num_workers=0,
     )
     return loader, sampler
@@ -193,6 +197,8 @@ def _run_epoch(
     *,
     mixed_precision: bool = False,
     scaler: torch.amp.GradScaler | None = None,
+    charset: str = ONHW_CHARSET,
+    blank_index: int = ONHW_BLANK_INDEX,
 ) -> tuple[float, list[str], list[str]]:
     is_training = optimizer is not None
     model.train(is_training)
@@ -244,7 +250,7 @@ def _run_epoch(
                 output_length = int(output_lengths[index].detach().cpu())
                 predictions.append(
                     ctc_greedy_decode(
-                        token_ids[index, :output_length].tolist(), ONHW_BLANK_INDEX
+                        token_ids[index, :output_length].tolist(), blank_index, charset
                     )
                 )
                 references.append(reference)
@@ -290,6 +296,7 @@ def run_training(
     num_threads: int = 4,
     model_type: str = "cnn_bilstm_ctc",
     mixed_precision: bool | None = None,
+    training_stage: str = "supervised",
     model_config: dict | None = None,
 ) -> dict:
     """Train and evaluate a CTC model on an official OnHW writer-independent fold."""
@@ -431,6 +438,7 @@ def run_training(
             "std": std.tolist(),
         },
         "model_type": model_type,
+        "training_stage": training_stage,
         "model": config,
         "model_parameters": parameter_count,
         "mixed_precision": use_mixed_precision,
@@ -455,6 +463,7 @@ def run_training(
     checkpoint = {
         "model_state": model.state_dict(),
         "model_type": model_type,
+        "training_stage": training_stage,
         "model_config": config,
         "normalization_mean": torch.from_numpy(mean),
         "normalization_std": torch.from_numpy(std),
