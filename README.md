@@ -64,9 +64,9 @@ Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instr
 
 **Not yet implemented:** live plots, sensor calibration or automatic pen-contact detection.
 
-## Handwriting recognition (M4/M5/M6-A)
+## Handwriting recognition (M4/M5/M6)
 
-The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, and [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for OnHW pretraining and personal-session fine-tuning. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
+The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for pretraining and personal-session fine-tuning, and [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for reproducible IMU augmentation ablations. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
 
 ## Hardware validation
 

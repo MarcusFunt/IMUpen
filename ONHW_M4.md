@@ -60,6 +60,8 @@ M5 preserves this baseline and adds a residual CNN-BiLSTM-CTC alternative. Use `
 
 M6-A uses an OnHW-trained M5 encoder to initialize fine-tuning on accepted personal recorder recordings, then compares that run with personal training from scratch on the same session-held-out split. See [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for the workflow and data requirements.
 
+M6-B compares temporal stretching, Gaussian sensor noise, per-axis bias/gain, physically consistent 3D rotations, and controlled sequence concatenation in isolated runs before an optional combined run. See [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for the reproducible training-only ablation workflow.
+
 | Fold | Seed | Train / validation samples | Epochs | CER | WER |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 0, writer-independent | 2026 | 64 / 64 | 1 | 94.03% (299 / 318 characters) | 100% (64 / 64 words) |
