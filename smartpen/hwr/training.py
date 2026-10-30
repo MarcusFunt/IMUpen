@@ -7,6 +7,7 @@ import os
 import platform
 import random
 import tempfile
+from contextlib import nullcontext
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,14 @@ from smartpen.hwr.data import (
     load_onhw_words500,
 )
 from smartpen.hwr.metrics import corpus_error_rates
-from smartpen.hwr.model import CNNBiLSTMCTC, ctc_greedy_decode, encoded_length
+from smartpen.hwr.model import (
+    MODEL_TYPES,
+    build_model,
+    count_parameters,
+    ctc_greedy_decode,
+    default_model_config,
+    encoded_length,
+)
 
 
 def seed_everything(seed: int, device_type: str = "cpu") -> None:
@@ -38,6 +46,14 @@ def seed_everything(seed: int, device_type: str = "cpu") -> None:
     if hasattr(torch.backends, "cudnn"):
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
+
+
+def _make_grad_scaler(enabled: bool) -> torch.amp.GradScaler:
+    """Use the current scaler API and retain compatibility with PyTorch 2.2."""
+    scaler_type = getattr(getattr(torch, "amp", None), "GradScaler", None)
+    if scaler_type is not None:
+        return scaler_type("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def _ctc_minimum_frames(tokens: Sequence[int]) -> int:
@@ -169,11 +185,14 @@ def _loader(
 
 
 def _run_epoch(
-    model: CNNBiLSTMCTC,
+    model: nn.Module,
     loader: DataLoader,
     loss_function: nn.CTCLoss,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
+    *,
+    mixed_precision: bool = False,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> tuple[float, list[str], list[str]]:
     is_training = optimizer is not None
     model.train(is_training)
@@ -189,8 +208,15 @@ def _run_epoch(
             target_lengths = batch["target_lengths"].to(device)
             if optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
-            logits, output_lengths = model(inputs, lengths)
-            log_probabilities = logits.log_softmax(dim=-1).transpose(0, 1)
+            autocast_context = (
+                torch.autocast(device_type="cuda", dtype=torch.float16)
+                if mixed_precision
+                else nullcontext()
+            )
+            with autocast_context:
+                logits, output_lengths = model(inputs, lengths)
+            # CTCLoss is kept in float32 for stable log-probabilities and gradients.
+            log_probabilities = logits.float().log_softmax(dim=-1).transpose(0, 1)
             loss = loss_function(
                 log_probabilities,
                 targets,
@@ -198,9 +224,17 @@ def _run_epoch(
                 target_lengths.to(device="cpu"),
             )
             if optimizer is not None:
-                loss.backward()
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                else:
+                    loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-                optimizer.step()
+                if scaler is not None and scaler.is_enabled():
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
 
             batch_size = len(batch["texts"])
             total_loss += float(loss.detach()) * batch_size
@@ -254,6 +288,8 @@ def run_training(
     max_train_samples: int | None = None,
     max_validation_samples: int | None = None,
     num_threads: int = 4,
+    model_type: str = "cnn_bilstm_ctc",
+    mixed_precision: bool | None = None,
     model_config: dict | None = None,
 ) -> dict:
     """Train and evaluate a CTC model on an official OnHW writer-independent fold."""
@@ -264,6 +300,8 @@ def run_training(
     device = torch.device(device_name)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA was requested but is not available")
+    if model_type not in MODEL_TYPES:
+        raise ValueError(f"unknown model type {model_type!r}; choose from {MODEL_TYPES}")
     seed_everything(seed, device.type)
     torch.set_num_threads(num_threads)
 
@@ -283,17 +321,19 @@ def run_training(
         raise ValueError("training and validation subsets must both be non-empty")
     mean, std = feature_normalization(train_records)
 
-    config = {
-        "num_classes": ONHW_BLANK_INDEX + 1,
-        "input_channels": 6,
-        "conv_channels": 32,
-        "hidden_size": 64,
-        "lstm_layers": 2,
-        "dropout": 0.1,
-    }
+    config = default_model_config(model_type, ONHW_BLANK_INDEX + 1)
     if model_config:
         config.update(model_config)
-    model = CNNBiLSTMCTC(**config).to(device)
+    model = build_model(model_type, config).to(device)
+    parameter_count = count_parameters(model)
+    use_mixed_precision = (
+        device.type == "cuda" if mixed_precision is None else mixed_precision
+    )
+    if use_mixed_precision and device.type != "cuda":
+        raise ValueError("mixed precision is supported only for CUDA training")
+    scaler = _make_grad_scaler(use_mixed_precision)
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
     train_loader, train_sampler = _loader(train_records, batch_size, seed, mean, std)
@@ -305,10 +345,20 @@ def run_training(
     for epoch in range(epochs):
         train_sampler.set_epoch(epoch)
         train_loss, _, _ = _run_epoch(
-            model, train_loader, loss_function, device, optimizer
+            model,
+            train_loader,
+            loss_function,
+            device,
+            optimizer,
+            mixed_precision=use_mixed_precision,
+            scaler=scaler,
         )
         validation_loss, hypotheses, references = _run_epoch(
-            model, validation_loader, loss_function, device
+            model,
+            validation_loader,
+            loss_function,
+            device,
+            mixed_precision=use_mixed_precision,
         )
         metrics = corpus_error_rates(hypotheses, references)
         epoch_results.append(
@@ -318,6 +368,10 @@ def run_training(
                 "validation_loss": validation_loss,
                 "validation_cer": metrics["cer"],
                 "validation_wer": metrics["wer"],
+                "character_errors": metrics["character_errors"],
+                "reference_characters": metrics["reference_characters"],
+                "word_errors": metrics["word_errors"],
+                "reference_words": metrics["reference_words"],
                 "validation_samples": len(references),
             }
         )
@@ -361,17 +415,25 @@ def run_training(
         },
         "seed": seed,
         "num_threads": num_threads,
+        "batch_size": batch_size,
         "python_version": platform.python_version(),
         "torch_version": str(torch.__version__),
         "numpy_version": np.__version__,
         "device": str(device),
+        "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "cuda_peak_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else None
+        ),
         "deterministic_algorithms": True,
         "normalization": {
             "source": "selected training samples only",
             "mean": mean.tolist(),
             "std": std.tolist(),
         },
+        "model_type": model_type,
         "model": config,
+        "model_parameters": parameter_count,
+        "mixed_precision": use_mixed_precision,
         "optimizer": "AdamW(lr=0.001, weight_decay=0.0001)",
         "ctc": {"blank_index": ONHW_BLANK_INDEX, "zero_infinity": True},
         "epochs": epoch_results,
@@ -392,6 +454,7 @@ def run_training(
     output.mkdir(parents=True, exist_ok=True)
     checkpoint = {
         "model_state": model.state_dict(),
+        "model_type": model_type,
         "model_config": config,
         "normalization_mean": torch.from_numpy(mean),
         "normalization_std": torch.from_numpy(std),
@@ -431,6 +494,7 @@ def evaluate_checkpoint(
     device_name: str = "auto",
     batch_size: int = 32,
     num_threads: int = 4,
+    mixed_precision: bool | None = None,
 ) -> dict:
     """Evaluate a saved checkpoint on its held-out official writer split."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -439,20 +503,30 @@ def evaluate_checkpoint(
     if device_name == "auto":
         device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
+    use_mixed_precision = (
+        device.type == "cuda" if mixed_precision is None else mixed_precision
+    )
+    if use_mixed_precision and device.type != "cuda":
+        raise ValueError("mixed precision is supported only for CUDA evaluation")
     seed_everything(selected_seed, device.type)
     torch.set_num_threads(num_threads)
     fold_data = load_onhw_words500(data_path, selected_fold)
     records, dropped_ctc = keep_ctc_feasible(fold_data.validation)
     records, indices = select_records(records, max_validation_samples, selected_seed + 1)
-    model = CNNBiLSTMCTC(**checkpoint["model_config"]).to(device)
+    model_type = checkpoint.get("model_type", "cnn_bilstm_ctc")
+    model = build_model(model_type, checkpoint["model_config"]).to(device)
     model.load_state_dict(checkpoint["model_state"])
     mean = checkpoint["normalization_mean"].numpy().astype(np.float32)
     std = checkpoint["normalization_std"].numpy().astype(np.float32)
     loader, _ = _loader(records, batch_size, selected_seed + 1, mean, std)
     loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
-    loss, hypotheses, references = _run_epoch(model, loader, loss_function, device)
+    loss, hypotheses, references = _run_epoch(
+        model, loader, loss_function, device, mixed_precision=use_mixed_precision
+    )
     result = {
         "dataset": "OnHW-Words500 writer-independent",
+        "model_type": model_type,
+        "model_parameters": count_parameters(model),
         "fold": selected_fold,
         "validation_samples": len(records),
         "validation_writers": len({record.writer_id for record in records}),
@@ -465,5 +539,124 @@ def evaluate_checkpoint(
         "metrics": corpus_error_rates(hypotheses, references),
         "seed": selected_seed,
         "device": str(device),
+        "mixed_precision": use_mixed_precision,
     }
     return result
+
+
+def run_comparison(
+    *,
+    data_path: str | Path,
+    output_dir: str | Path,
+    fold: int = 0,
+    epochs: int = 10,
+    batch_size: int = 32,
+    seed: int = 1337,
+    device_name: str = "auto",
+    max_train_samples: int | None = None,
+    max_validation_samples: int | None = None,
+    num_threads: int = 4,
+    mixed_precision: bool | None = None,
+) -> dict:
+    """Train M4 and M5 sequentially on identical samples and write a comparison."""
+    output = Path(output_dir)
+    runs = {}
+    for model_type in MODEL_TYPES:
+        runs[model_type] = run_training(
+            data_path=data_path,
+            output_dir=output / model_type,
+            fold=fold,
+            epochs=epochs,
+            batch_size=batch_size,
+            seed=seed,
+            device_name=device_name,
+            max_train_samples=max_train_samples,
+            max_validation_samples=max_validation_samples,
+            num_threads=num_threads,
+            model_type=model_type,
+            mixed_precision=mixed_precision,
+        )
+
+    baseline = runs["cnn_bilstm_ctc"]
+    resnet = runs["resnet_bilstm_ctc"]
+    same_split = (
+        baseline["sample_indices"] == resnet["sample_indices"]
+        and baseline["archive_sha256"] == resnet["archive_sha256"]
+        and baseline["fold"] == resnet["fold"]
+        and baseline["seed"] == resnet["seed"]
+        and baseline["normalization"] == resnet["normalization"]
+    )
+    if not same_split:
+        raise RuntimeError("M4/M5 comparison did not use identical data and split settings")
+    same_optimization = (
+        len(baseline["epochs"]) == len(resnet["epochs"]) == epochs
+        and all(
+            baseline[key] == resnet[key]
+            for key in ("mixed_precision", "num_threads", "batch_size", "device")
+        )
+    )
+    if not same_optimization:
+        raise RuntimeError("M4/M5 comparison settings differ")
+    if baseline["writer_leakage"] or resnet["writer_leakage"]:
+        raise RuntimeError("M4/M5 comparison includes writer leakage")
+
+    comparison = {
+        "schema_version": 1,
+        "run_kind": baseline["run_kind"],
+        "dataset": baseline["dataset"],
+        "archive_sha256": baseline["archive_sha256"],
+        "fold": fold,
+        "seed": seed,
+        "device": baseline["device"],
+        "device_name": baseline["device_name"],
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "mixed_precision": baseline["mixed_precision"],
+        "python_version": baseline["python_version"],
+        "torch_version": baseline["torch_version"],
+        "numpy_version": baseline["numpy_version"],
+        "deterministic_algorithms": baseline["deterministic_algorithms"],
+        "normalization": baseline["normalization"],
+        "train_sample_count": baseline["train_samples_used"],
+        "validation_sample_count": baseline["validation_samples_used"],
+        "train_writer_count": baseline["train_writers_sampled"],
+        "validation_writer_count": baseline["validation_writers_sampled"],
+        "train_sample_indices": baseline["sample_indices"]["train"],
+        "validation_sample_indices": baseline["sample_indices"]["validation"],
+        "fairness_checks": {
+            "same_archive_sha256": True,
+            "same_official_fold_and_sample_indices": True,
+            "same_train_only_normalization": True,
+            "same_seed_batch_size_epochs_and_device": True,
+            "writer_leakage": False,
+        },
+        "models": {
+            model_type: {
+                "parameters": report["model_parameters"],
+                "cuda_peak_memory_bytes": report["cuda_peak_memory_bytes"],
+                "configuration": report["model"],
+                "final_metrics": report["final_metrics"],
+                "final_metric_counts": {
+                    key: report["epochs"][-1][key]
+                    for key in (
+                        "character_errors",
+                        "reference_characters",
+                        "word_errors",
+                        "reference_words",
+                    )
+                },
+                "epoch_metrics": report["epochs"],
+                "run_directory": model_type,
+            }
+            for model_type, report in runs.items()
+        },
+        "interpretation": (
+            "Sample-capped experiment; use as an implementation comparison only. "
+            "It is not a full-fold benchmark or a claim of improved handwriting accuracy."
+            if report_is_sample(max_train_samples, max_validation_samples)
+            else "Measured on this full official fold only; no cross-fold average is implied."
+        ),
+        "measured_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    _atomic_json(output / "comparison.json", comparison)
+    return comparison

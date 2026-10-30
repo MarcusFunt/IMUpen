@@ -56,6 +56,8 @@ Empty recordings and sequences too short for a valid CTC alignment are excluded 
 
 The repository's `reports/onhw_fold0_sample.json` records a real one-epoch CPU training and held-out evaluation run using 64 training and 64 validation samples from official fold 0. It reports the measured CER/WER and all sample indexes and run settings. This short run verifies that the real archive loads, six-axis adaptation works, the model updates, checkpoint save/load works, and held-out evaluation completes; its score is not a performance claim. On the recording host, PyTorch `2.13.0+xpu` printed an unsupported integrated-GPU warning even though the requested and reported device was CPU; training and the separate checkpoint evaluation both completed.
 
+M5 preserves this baseline and adds a residual CNN-BiLSTM-CTC alternative. Use `python -m smartpen.hwr.cli compare` to train both models with identical fold, seed, sample indexes, and optimization settings; see [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md).
+
 | Fold | Seed | Train / validation samples | Epochs | CER | WER |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 0, writer-independent | 2026 | 64 / 64 | 1 | 94.03% (299 / 318 characters) | 100% (64 / 64 words) |
