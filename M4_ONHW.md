@@ -93,3 +93,33 @@ orientation alignment, and personal fine-tuning follow in M5/M6.
 ```bash
 python -m pytest -q tests/test_ml_m4.py
 ```
+
+
+## Confirmed real OnHW subset integration test (October 30, 2026)
+
+[GitHub Actions run 41036741654](https://github.com/MarcusFunt/IMUpen/actions/runs/41036741654)
+successfully downloaded the real OnHW-Words500 writer-independent archive,
+trained the M4 CNN-BiLSTM-CTC model on the six-axis subset, and evaluated
+against official validation recordings not used for gradient updates.
+
+Configuration: fold 0, seed 42, randomly selected 400 official training
+recordings (337 fit, 63 internal validation after splitting by writer),
+100 randomly selected official held-out validation recordings, one epoch,
+8 CNN channels, 16 LSTM hidden units, one LSTM layer, 8,076 parameters.
+
+| Quantity | Measured result |
+| --- | ---: |
+| Internal writer-held-out CER | 94.53% |
+| Official held-out subset CER | 92.66% |
+| Official held-out subset WER | 100% |
+| Official held-out exact-word accuracy | 0% |
+| Official evaluation samples | 100 |
+| Official writer IDs disjoint from training | Yes |
+
+**Interpretation:** These scores show that the real-data pipeline runs from
+OnHW download to training, checkpoint selection, prediction, and CER/WER.
+The tiny one-epoch model is not a functional transcription recognizer.
+This is NOT the full OnHW benchmark, NOT a fair comparison with published
+models, and NOT an estimate of personalized LSM6DS3 accuracy. A full
+multi-epoch training run on the RTX 3060 is still required to judge model
+quality. The underlying JSON was uploaded by the CI workflow as an artifact.
