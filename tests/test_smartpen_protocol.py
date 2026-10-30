@@ -83,3 +83,16 @@ def test_timestamp_regression_and_discontinuity():
 def test_encoder_rejects_unsupported_message():
     with pytest.raises(TypeError):
         encode_frame(object())
+
+
+def test_independent_wire_golden_vector():
+    # Byte-level contract: seq=0x01020304, timestamp=0x0102030405060708,
+    # axes=(-1,2,-3,4,-5,6), flags=7. CRC16=0xE97C.
+    golden = bytes.fromhex(
+        "5aa501011a00040302010807060504030201"
+        "ffff0200fdff0400fbff060007007ce9"
+    )
+    msg = Sample(0x01020304, 0x0102030405060708,
+                 -1, 2, -3, 4, -5, 6, 7)
+    assert encode_frame(msg) == golden
+    assert FrameParser().feed(golden)[0].message == msg
