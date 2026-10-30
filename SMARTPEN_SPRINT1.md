@@ -2,7 +2,8 @@
 
 The existing XIAO MG24 Sense AHRS viewer remains unchanged. This directory
 adds an **independent** ESP32-S3 + standalone LSM6DS3 handwriting capture
-pipeline. It does not yet include handwriting recognition or a graphical GUI.
+pipeline. It does not yet include handwriting recognition. A minimal optional
+PySide6 prompt-and-record GUI is included; live plotting is future work.
 
 ## Before connecting the sensor
 
@@ -58,6 +59,16 @@ recording lacks a config packet, the collector uses the latest config seen
 while idle. If no config was received, metadata records null; do not assume
 sensor units without validating configuration.
 
+## Optional graphical recorder
+
+Install the GUI extra and launch the prompt/record/accept/reject window:
+
+    pip install -e ".[gui]"
+    smartpen-gui --port COM6 --writer p01 --session day01 \
+      --prompts prompts/demo.txt --output datasets
+
+This is a basic prompted interface. It does not yet plot the six sensor axes.
+
 ## Replay
 
     smartpen-replay datasets/raw/day01/<id>.bin
@@ -78,5 +89,5 @@ gyro/accel scale, signal clipping, and loss counters over a long recording.
 
 ## Next sprint
 
-PySide6 prompted GUI and live plots, dataset quality dashboard, calibration,
+Live sensor plots and a data quality dashboard, calibration,
 resampling, training/validation/test split manifests, then CNN-BiLSTM-CTC.
