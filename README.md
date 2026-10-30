@@ -59,9 +59,14 @@ Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instr
 - Versioned, CRC16-checked binary USB frames with sample sequence counters and error telemetry.
 - Prompted Python terminal and optional PySide6 graphical recording tools.
 - Immutable raw binary streams and decoded NumPy arrays, plus JSON metadata and JSONL manifests.
+- Optional six-axis CNN-BiLSTM-CTC handwriting recognition with OnHW-Words500 training, held-out writer evaluation, and CER/WER reporting.
 - Host unit tests and GitHub Actions Python/firmware builds.
 
-**Not yet implemented:** model training, handwriting recognition, live plots, sensor calibration or automatic pen-contact detection.
+**Not yet implemented:** live plots, sensor calibration or automatic pen-contact detection.
+
+## Handwriting recognition (M4)
+
+The recognizer is an optional install so the recorder does not need the PyTorch runtime. To train or evaluate it, install `python -m pip install -e ".[ml]"` and follow [ONHW_M4.md](ONHW_M4.md). The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
 
 ## Hardware validation
 
