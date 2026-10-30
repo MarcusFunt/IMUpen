@@ -1,0 +1,55 @@
+name: M4 OnHW-CTC
+on:
+  push:
+    branches: ["feature/m4-onhw-ctc"]
+    paths:
+      - "smartpen/ml/**"
+      - "tests/test_ml_m4.py"
+      - "scripts/download_onhw_words500.py"
+      - ".github/workflows/m4-onhw.yml"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  ml-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[test,ml]"
+      - run: python -m pytest -q tests/test_ml_m4.py
+
+  real-onhw-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[ml]"
+      - name: Download licensed OnHW-Words500 (not committed)
+        run: python scripts/download_onhw_words500.py --dest datasets/onhw
+      - name: Train and evaluate on REAL OnHW debug subset
+        run: |
+          python -m smartpen.ml.training \
+            --onhw datasets/onhw/extracted --trust-pickle --fold 0 \
+            --max-train 400 --max-official-val 100 \
+            --epochs 1 --batch-size 16 --channels 8 --hidden 16 --layers 1 \
+            --out runs/ci-onhw
+      - name: Upload debug-subset results (not official benchmark)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-onhw-subset-evidence
+          path: runs/ci-onhw/results.json
+          if-no-files-found: ignore
+          retention-days: 14

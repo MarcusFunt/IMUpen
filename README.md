@@ -61,7 +61,9 @@ Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instr
 - Immutable raw binary streams and decoded NumPy arrays, plus JSON metadata and JSONL manifests.
 - Host unit tests and GitHub Actions Python/firmware builds.
 
-**Not yet implemented:** model training, handwriting recognition, live plots, sensor calibration or automatic pen-contact detection.
+**M4 added:** a six-channel OnHW-Words500 CNN-BiLSTM-CTC baseline, train-only normalization, grouped writer split, CTC greedy decoding, CER/WER, best-epoch checkpoints, and reproducible training/testing. See [M4_ONHW.md](M4_ONHW.md). The model must still be calibrated and fine-tuned for personal pen recordings.
+
+**Not yet implemented:** validated personal handwriting recognition, live plots, sensor calibration, or automatic pen-contact detection.
 
 ## Hardware validation
 
