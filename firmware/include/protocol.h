@@ -21,7 +21,8 @@ enum : uint16_t {
 enum : uint16_t {
   kErrorFifoOverruns = 1,
   kErrorI2cFailures = 2,
-  kErrorTxDrops = 3
+  kErrorTxDrops = 3,
+  kErrorSensorInit = 4
 };
 
 // All integers are little-endian on the wire, never memcpy'ed from structs.

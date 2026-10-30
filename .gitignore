@@ -15,3 +15,12 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# New smartpen data is personal and potentially large
+/datasets/
+/firmware/.pio/
+/firmware/.vscode/
+*.npz
+*.bin
+.coverage
+

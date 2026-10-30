@@ -44,8 +44,12 @@ void setup() {
 void loop() {
   if (!imu_ready) {
     // Initialization failed: do not pretend samples are valid.
-    // Reboot after wiring/address/chip correction.
-    delay(1000);
+    // Report a binary diagnostic; check board, I2C pins and WHO_AM_I.
+    if (millis() - last_telemetry_ms >= 2000) {
+      sendError(kErrorSensorInit, 1);
+      last_telemetry_ms = millis();
+    }
+    delay(50);
     return;
   }
   RawImuSample raw;

@@ -59,7 +59,7 @@ gyro_range_dps u16, i2c_address u8, sda_pin u8, scl_pin u8,
 who_am_i u8, flags u16. Config flag bit 0 means nominal ODR timestamps.
 
 Error payload (6 bytes): error_code u16, cumulative_count u32.
-Error codes: 1 FIFO overrun, 2 I2C failure, 3 USB TX drops.
+Error codes: 1 FIFO overrun, 2 I2C failure, 3 USB TX drops, 4 sensor initialization failed.
 
 Sample flags: bit 0 discontinuity, bit 1 FIFO overrun, bit 2 I2C failure.
 Sequence numbers are u32 and wrap; a gap in the sequence indicates samples

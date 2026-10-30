@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imupen-smartpen"
+version = "0.1.0"
+description = "ESP32-S3 LSM6DS3 prompted handwriting recording pipeline"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pyserial>=3.5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+smartpen-collect = "smartpen.collector.cli:main"
+smartpen-replay = "smartpen.collector.replay:main"
+
+[tool.setuptools.packages.find]
+include = ["smartpen*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

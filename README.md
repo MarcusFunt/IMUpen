@@ -80,3 +80,16 @@ and version before passing each sample to the selected AHRS filter.
 
 This project is released under the MIT License. See [LICENSE](LICENSE) for
 details.
+
+## ESP32-S3 + standalone LSM6DS3 handwriting capture (new)
+
+A separate, research-oriented data collection pipeline is being developed
+alongside the legacy XIAO MG24 viewer. See [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md)
+for setup, commands, recording format and hardware-validation cautions, and
+[firmware/README.md](firmware/README.md) for the binary protocol and wiring.
+
+The new Python package is under smartpen/, the new PlatformIO target under
+firmware/, and protocol/storage tests under tests/. The original MG24 tools
+and their 38-byte float packet protocol are **not** compatible with the new
+34-byte int16+CRC protocol; use the matching collector for each firmware.
+
