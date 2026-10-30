@@ -12,11 +12,14 @@ dependencies = ["numpy>=1.24", "pyserial>=3.5"]
 [project.optional-dependencies]
 test = ["pytest>=8"]
 gui = ["PySide6>=6.6"]
+ml = ["torch>=2.3"]
 
 [project.scripts]
 smartpen-collect = "smartpen.collector.cli:main"
 smartpen-replay = "smartpen.collector.replay:main"
 smartpen-gui = "smartpen.collector.gui:main"
+smartpen-train-onhw = "smartpen.ml.training:main"
+smartpen-transcribe = "smartpen.ml.predict:main"
 
 [tool.setuptools.packages.find]
 include = ["smartpen*"]
