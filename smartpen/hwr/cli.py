@@ -8,7 +8,12 @@ from pathlib import Path
 from smartpen.hwr.data import PERSONAL_CHARSET
 from smartpen.hwr.model import MODEL_TYPES
 from smartpen.hwr.personal import run_onhw_encoder_pretraining, run_personal_comparison
-from smartpen.hwr.training import evaluate_checkpoint, run_comparison, run_training
+from smartpen.hwr.training import (
+    evaluate_checkpoint,
+    run_augmentation_ablation,
+    run_comparison,
+    run_training,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,6 +30,24 @@ def _parser() -> argparse.ArgumentParser:
         "compare", help="train M4 and M5 with identical data and optimization settings"
     )
     _add_training_arguments(compare)
+
+    augment_ablate = commands.add_parser(
+        "augment-ablate",
+        help="run M6-B baseline and independent training-only IMU augmentation ablations",
+    )
+    _add_training_arguments(augment_ablate)
+    augment_ablate.add_argument("--model-type", choices=MODEL_TYPES, default="resnet_bilstm_ctc")
+    augment_ablate.add_argument(
+        "--include-combined",
+        action="store_true",
+        help="also run a combined augmentation experiment after all isolated variants",
+    )
+    augment_ablate.add_argument(
+        "--concat-delimiter",
+        default="",
+        help="label boundary for concatenation (OnHW vocabulary requires the default empty string)",
+    )
+    augment_ablate.add_argument("--concat-gap-frames", type=int, default=8)
 
     pretrain = commands.add_parser(
         "pretrain", help="pretrain the M5 encoder on the licensed OnHW dataset"
@@ -125,6 +148,27 @@ def main() -> None:
             mixed_precision=args.mixed_precision,
         )
         print(json.dumps(comparison, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "augment-ablate":
+        report = run_augmentation_ablation(
+            data_path=args.data,
+            output_dir=args.output,
+            fold=args.fold,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            device_name=args.device,
+            max_train_samples=args.max_train_samples,
+            max_validation_samples=args.max_validation_samples,
+            num_threads=args.num_threads,
+            mixed_precision=args.mixed_precision,
+            model_type=args.model_type,
+            include_combined=args.include_combined,
+            concat_delimiter=args.concat_delimiter,
+            concat_gap_frames=args.concat_gap_frames,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return
 
     if args.command == "pretrain":

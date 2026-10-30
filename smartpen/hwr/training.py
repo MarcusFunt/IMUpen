@@ -17,6 +17,13 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler
 
+from smartpen.hwr.augment import (
+    AUGMENTATION_NAMES,
+    SINGLE_AUGMENTATIONS,
+    apply_augmentation,
+    augmentation_plan,
+    concatenate_training_records,
+)
 from smartpen.hwr.data import (
     ONHW_BLANK_INDEX,
     ONHW_CHARSET,
@@ -118,6 +125,43 @@ class _RecordDataset(Dataset):
         return self.records[index]
 
 
+class _AugmentedRecordDataset(_RecordDataset):
+    """Sample-stable, epoch-varying transforms for fitting records only."""
+
+    def __init__(
+        self,
+        records: Sequence[SequenceRecord],
+        *,
+        transforms: Sequence[str],
+        training_std: np.ndarray,
+        seed: int,
+        charset: str,
+    ) -> None:
+        super().__init__(records)
+        self.transforms = tuple(transforms)
+        self.training_std = training_std
+        self.seed = seed
+        self.charset = charset
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __getitem__(self, index: int) -> SequenceRecord:
+        record = self.records[index]
+        if not self.transforms:
+            return record
+        rng = np.random.default_rng(np.random.SeedSequence([self.seed, self.epoch, index]))
+        augmented = record
+        for transform in self.transforms:
+            augmented = apply_augmentation(augmented, transform, rng, self.training_std)
+        tokens = encode_text(augmented.text, self.charset)
+        if encoded_length(len(augmented.features)) < _ctc_minimum_frames(tokens):
+            # A shortening time warp may violate CTC's repeated-label minimum.
+            return record
+        return augmented
+
+
 class _LengthBucketBatchSampler(Sampler[list[int]]):
     """Group similar lengths to limit padding, shuffling batches per epoch."""
 
@@ -177,10 +221,18 @@ def _loader(
     mean: np.ndarray,
     std: np.ndarray,
     charset: str = ONHW_CHARSET,
+    augmentation_transforms: Sequence[str] = (),
+    augmentation_seed: int = 0,
 ) -> tuple[DataLoader, _LengthBucketBatchSampler]:
     sampler = _LengthBucketBatchSampler(records, batch_size, seed)
     loader = DataLoader(
-        _RecordDataset(records),
+        _AugmentedRecordDataset(
+            records,
+            transforms=augmentation_transforms,
+            training_std=std,
+            seed=augmentation_seed,
+            charset=charset,
+        ),
         batch_sampler=sampler,
         collate_fn=_collate_records(mean, std, charset),
         num_workers=0,
@@ -298,6 +350,9 @@ def run_training(
     mixed_precision: bool | None = None,
     training_stage: str = "supervised",
     model_config: dict | None = None,
+    augmentation: str = "none",
+    concat_delimiter: str = "",
+    concat_gap_frames: int = 8,
 ) -> dict:
     """Train and evaluate a CTC model on an official OnHW writer-independent fold."""
     if epochs < 1 or batch_size < 1 or num_threads < 1:
@@ -309,6 +364,11 @@ def run_training(
         raise ValueError("CUDA was requested but is not available")
     if model_type not in MODEL_TYPES:
         raise ValueError(f"unknown model type {model_type!r}; choose from {MODEL_TYPES}")
+    transforms, add_concatenations = augmentation_plan(augmentation)
+    if augmentation not in AUGMENTATION_NAMES:
+        raise ValueError(f"unknown augmentation {augmentation!r}")
+    if concat_gap_frames < 0:
+        raise ValueError("concat_gap_frames must be non-negative")
     seed_everything(seed, device.type)
     torch.set_num_threads(num_threads)
 
@@ -326,7 +386,24 @@ def run_training(
     )
     if not train_records or not validation_records:
         raise ValueError("training and validation subsets must both be non-empty")
+    # Fit the same original-data statistics for every ablation. Augmentations
+    # are applied afterwards and only to fitting records.
     mean, std = feature_normalization(train_records)
+    concatenated_records = (
+        concatenate_training_records(
+            train_records,
+            seed=seed,
+            charset=ONHW_CHARSET,
+            delimiter=concat_delimiter,
+            gap_frames=concat_gap_frames,
+        )
+        if add_concatenations
+        else []
+    )
+    concatenated_records, dropped_concatenations_ctc = keep_ctc_feasible(
+        concatenated_records
+    )
+    augmented_train_records = train_records + concatenated_records
 
     config = default_model_config(model_type, ONHW_BLANK_INDEX + 1)
     if model_config:
@@ -343,7 +420,15 @@ def run_training(
         torch.cuda.reset_peak_memory_stats(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
-    train_loader, train_sampler = _loader(train_records, batch_size, seed, mean, std)
+    train_loader, train_sampler = _loader(
+        augmented_train_records,
+        batch_size,
+        seed,
+        mean,
+        std,
+        augmentation_transforms=transforms,
+        augmentation_seed=seed,
+    )
     validation_loader, _ = _loader(
         validation_records, batch_size, seed + 1, mean, std
     )
@@ -351,6 +436,7 @@ def run_training(
     epoch_results: list[dict] = []
     for epoch in range(epochs):
         train_sampler.set_epoch(epoch)
+        train_loader.dataset.set_epoch(epoch)
         train_loss, _, _ = _run_epoch(
             model,
             train_loader,
@@ -400,6 +486,9 @@ def run_training(
         "train_samples_ctc_feasible": len(feasible_train),
         "validation_samples_ctc_feasible": len(feasible_validation),
         "train_samples_used": len(train_records),
+        "train_sequences_after_augmentation": len(augmented_train_records),
+        "sequence_concatenations_added": len(concatenated_records),
+        "sequence_concatenations_dropped_ctc": dropped_concatenations_ctc,
         "validation_samples_used": len(validation_records),
         "train_writers_available": len(train_writers),
         "validation_writers_available": len(validation_writers),
@@ -439,6 +528,23 @@ def run_training(
         },
         "model_type": model_type,
         "training_stage": training_stage,
+        "augmentation": {
+            "name": augmentation,
+            "online_transforms": list(transforms),
+            "sequence_concatenation": add_concatenations,
+            "concat_delimiter": concat_delimiter if add_concatenations else None,
+            "concat_gap_frames": concat_gap_frames if add_concatenations else None,
+            "seed": seed,
+            "applied_only_to_training": True,
+            "normalization_fit_before_augmentation": True,
+            "parameters": {
+                "temporal_stretch_factor": [0.9, 1.1],
+                "gaussian_noise_axis_std_fraction": 0.01,
+                "sensor_gain_range": [0.97, 1.03],
+                "sensor_bias_std_fraction": 0.02,
+                "rotation_euler_degrees": [-5.0, 5.0],
+            },
+        },
         "model": config,
         "model_parameters": parameter_count,
         "mixed_precision": use_mixed_precision,
@@ -464,6 +570,7 @@ def run_training(
         "model_state": model.state_dict(),
         "model_type": model_type,
         "training_stage": training_stage,
+        "augmentation": report["augmentation"],
         "model_config": config,
         "normalization_mean": torch.from_numpy(mean),
         "normalization_std": torch.from_numpy(std),
@@ -669,3 +776,152 @@ def run_comparison(
     }
     _atomic_json(output / "comparison.json", comparison)
     return comparison
+
+
+def run_augmentation_ablation(
+    *,
+    data_path: str | Path,
+    output_dir: str | Path,
+    fold: int = 0,
+    epochs: int = 10,
+    batch_size: int = 32,
+    seed: int = 1337,
+    device_name: str = "auto",
+    max_train_samples: int | None = None,
+    max_validation_samples: int | None = None,
+    num_threads: int = 4,
+    mixed_precision: bool | None = None,
+    model_type: str = "resnet_bilstm_ctc",
+    include_combined: bool = False,
+    concat_delimiter: str = "",
+    concat_gap_frames: int = 8,
+) -> dict:
+    """Run M6-B baseline and isolated augmentation experiments on one split."""
+    output = Path(output_dir)
+    variants = ["none", *SINGLE_AUGMENTATIONS]
+    if include_combined:
+        variants.append("combined")
+    reports: dict[str, dict] = {}
+    for variant in variants:
+        reports[variant] = run_training(
+            data_path=data_path,
+            output_dir=output / variant,
+            fold=fold,
+            epochs=epochs,
+            batch_size=batch_size,
+            seed=seed,
+            device_name=device_name,
+            max_train_samples=max_train_samples,
+            max_validation_samples=max_validation_samples,
+            num_threads=num_threads,
+            model_type=model_type,
+            mixed_precision=mixed_precision,
+            training_stage="m6b_augmentation_ablation",
+            augmentation=variant,
+            concat_delimiter=concat_delimiter,
+            concat_gap_frames=concat_gap_frames,
+        )
+
+    reference = reports["none"]
+    common_keys = (
+        "archive_sha256",
+        "fold",
+        "seed",
+        "sample_indices",
+        "normalization",
+        "model_type",
+        "model",
+        "batch_size",
+        "mixed_precision",
+        "num_threads",
+        "device",
+        "optimizer",
+    )
+    same_setup = all(
+        all(report[key] == reference[key] for key in common_keys)
+        and len(report["epochs"]) == epochs
+        for report in reports.values()
+    )
+    writer_safe = all(not report["writer_leakage"] for report in reports.values())
+    validation_unaugmented = all(
+        report["augmentation"]["applied_only_to_training"]
+        and report["augmentation"]["normalization_fit_before_augmentation"]
+        for report in reports.values()
+    )
+    if not same_setup or not writer_safe or not validation_unaugmented:
+        raise RuntimeError("M6-B ablations failed their shared-split/fairness checks")
+
+    result = {
+        "schema_version": 1,
+        "experiment": "M6-B independent six-axis IMU augmentation ablation",
+        "run_kind": reference["run_kind"],
+        "dataset": reference["dataset"],
+        "source_archive": Path(data_path).name,
+        "archive_sha256": reference["archive_sha256"],
+        "fold": fold,
+        "seed": seed,
+        "model_type": model_type,
+        "model_parameters": reference["model_parameters"],
+        "model_configuration": reference["model"],
+        "device": reference["device"],
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "num_threads": num_threads,
+        "mixed_precision": reference["mixed_precision"],
+        "optimizer": reference["optimizer"],
+        "python_version": reference["python_version"],
+        "torch_version": reference["torch_version"],
+        "numpy_version": reference["numpy_version"],
+        "deterministic_algorithms": reference["deterministic_algorithms"],
+        "train_sample_count": reference["train_samples_used"],
+        "validation_sample_count": reference["validation_samples_used"],
+        "train_sample_indices": reference["sample_indices"]["train"],
+        "validation_sample_indices": reference["sample_indices"]["validation"],
+        "normalization": reference["normalization"],
+        "variants": {
+            variant: {
+                "augmentation": report["augmentation"],
+                "final_metrics": report["final_metrics"],
+                "final_metric_counts": {
+                    key: report["epochs"][-1][key]
+                    for key in (
+                        "character_errors",
+                        "reference_characters",
+                        "word_errors",
+                        "reference_words",
+                    )
+                },
+                "epoch_metrics": report["epochs"],
+                "train_sequences_after_augmentation": report[
+                    "train_sequences_after_augmentation"
+                ],
+                "sequence_concatenations_added": report[
+                    "sequence_concatenations_added"
+                ],
+                "sequence_concatenations_dropped_ctc": report[
+                    "sequence_concatenations_dropped_ctc"
+                ],
+                "run_directory": variant,
+            }
+            for variant, report in reports.items()
+        },
+        "fairness_checks": {
+            "same_archive_fold_and_sample_indices": same_setup,
+            "same_model_optimizer_seed_and_epoch_count": same_setup,
+            "same_training_only_normalization": same_setup,
+            "validation_not_augmented": validation_unaugmented,
+            "writer_leakage": not writer_safe,
+            "sequence_concatenation_uses_training_only_same_writer_session": True,
+        },
+        "interpretation": (
+            "Sample-capped implementation smoke experiment. Results verify the "
+            "pipeline and are not benchmark or accuracy claims."
+            if report_is_sample(max_train_samples, max_validation_samples)
+            else "Single-fold ablation results only; no cross-fold average or "
+            "accuracy improvement is implied."
+        ),
+        "measured_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    output.mkdir(parents=True, exist_ok=True)
+    _atomic_json(output / "augmentation_ablation.json", result)
+    return result
