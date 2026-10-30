@@ -1,21 +1,17 @@
-# ESP32-S3 + standalone LSM6DS3 recorder (experimental)
-
-This is a **new** hardware target. The older XIAO MG24 Sense sketches in the
-repository are retained and use a different protocol.
+# Seeed XIAO ESP32-S3 + standalone LSM6DS3 recorder (experimental)
 
 ## Wiring (3.3 V logic only)
 
 - LSM6DS3 VCC -> 3V3 (check breakout voltage requirements)
 - GND -> GND
-- SDA -> configured ESP32-S3 SDA GPIO
-- SCL -> configured ESP32-S3 SCL GPIO
+- SDA -> XIAO pad **D4 (GPIO5, SDA)**
+- SCL -> XIAO pad **D5 (GPIO6, SCL)**
 - If your breakout exposes CS, tie it HIGH for I2C as its documentation specifies.
 - SA0/SDO selects I2C address 0x6A or 0x6B; firmware scans both.
 
-**Before flashing:** edit firmware/platformio.ini to select your exact board and
-SDA/SCL pins. The default generic devkit and GPIO 8/9 are placeholders, NOT a
-wiring recommendation for every ESP32-S3 board. Native USB CDC support and
-the correct USB port also depend on the board.
+**Board configuration:** firmware/platformio.ini targets
+`seeed_xiao_esp32s3` with GPIO5/GPIO6 matching the exposed D4/D5 I2C pads.
+The native USB CDC port is used for the binary stream.
 
 Build and flash with PlatformIO:
   cd firmware
@@ -66,6 +62,6 @@ Sequence numbers are u32 and wrap; a gap in the sequence indicates samples
 captured but not transmitted. A FIFO overflow may lose additional samples
 that cannot be counted exactly, so treat it as a segment boundary.
 
-This firmware has not yet been hardware-validated on your exact board and
-breakout. Verify FIFO word order, sampling, clipping, and USB behavior on
+This firmware has not yet been hardware-validated on your XIAO ESP32-S3 and
+standalone breakout. Verify FIFO word order, sampling, clipping, and USB behavior on
 your actual hardware before collecting training data.

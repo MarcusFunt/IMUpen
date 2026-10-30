@@ -1,5 +1,0 @@
-ahrs
-pyserial
-dearpygui
-numpy
-pytest

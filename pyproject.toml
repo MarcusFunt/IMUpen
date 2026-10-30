@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "imupen-smartpen"
 version = "0.1.0"
-description = "ESP32-S3 LSM6DS3 prompted handwriting recording pipeline"
+description = "Seeed XIAO ESP32-S3 + LSM6DS3 personalized handwriting recorder"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pyserial>=3.5"]
 

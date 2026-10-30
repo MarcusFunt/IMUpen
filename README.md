@@ -1,95 +1,74 @@
-# IMUpen
+# IMUpen — XIAO ESP32-S3 + LSM6DS3 SmartPen
 
-Real-time AHRS viewer for the Seeed Studio XIAO MG24 Sense. The project is made
-up of two pieces:
+A personalized handwriting-data collection platform for a **Seeed Studio XIAO ESP32-S3** connected to a **standalone ST LSM6DS3 six-axis IMU**. The firmware reads an accelerometer and gyroscope, streams framed binary packets over native USB CDC, and the Python application records labeled handwriting samples for later machine-learning experiments.
 
-1. `xiao_mg24_imu_stream.ino` – an Arduino sketch that powers up the onboard
-   LSM6DS3TR-C IMU and streams accelerometer/gyroscope samples as binary packets
-   over USB.
-2. `xiao_mg24_ahrs_gui.py` – a Python utility that ingests the binary stream,
-   filters it with the Madgwick or UKF AHRS algorithms, and visualises the
-   resulting direction vector using DearPyGui.
+## Hardware connections
 
-The repo now also contains a lightweight CI workflow and a modern `.gitignore`
-to make contributing a little smoother.
+Connect your standalone LSM6DS3 breakout to the XIAO ESP32-S3's exposed I2C pads:
 
-## Requirements
+| LSM6DS3 breakout | XIAO ESP32-S3 pad | Chip GPIO |
+| --- | --- | --- |
+| SDA | D4 / SDA | GPIO5 |
+| SCL | D5 / SCL | GPIO6 |
+| VCC | 3V3 | — |
+| GND | GND | — |
 
-* Python 3.10+
-* Arduino IDE (or PlatformIO) for flashing the sketch
-* System dependencies for [DearPyGui](https://github.com/hoffstadt/DearPyGui)
+Use **3.3 V logic**. Check the breakout's power requirements and whether it needs pull-up resistors. If it exposes CS, follow the module's instructions for I2C mode (typically CS high). SA0/SDO controls I2C address; firmware probes 0x6A and 0x6B.
 
-Install the Python dependencies into a virtual environment:
+The PlatformIO target and pin assignments are set to the XIAO ESP32-S3; no board-pin edits are needed for these connections.
+
+## Quick start
+
+Install Python 3.10+, PlatformIO, and dependencies:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -e ".[test,gui]"
+python -m pytest -q
 ```
 
-## Usage
-
-1. Flash the `xiao_mg24_imu_stream.ino` sketch onto the XIAO MG24 Sense.
-2. Identify the serial port that the board enumerated as (e.g. `/dev/ttyACM0` on
-   Linux, `COM6` on Windows).
-3. Run the GUI:
+Build and flash the XIAO ESP32-S3:
 
 ```bash
-python xiao_mg24_ahrs_gui.py --serial-port /dev/ttyACM0
+cd firmware
+pio run
+pio run -t upload
+cd ..
 ```
 
-Command-line options:
+Connect to its USB CDC serial port (replace COM6 with the port on your computer) and start the graphical prompted handwriting recorder:
 
-* `--serial-port` – port name; defaults to the value of
-  `IMUPEN_SERIAL_PORT` (or `COM6`).
-* `--baud-rate` – serial speed; must match the sketch (default `115200`).
-* `--history-length` – number of samples retained for the rolling plot.
-* `--filter` – choose `madgwick` (default) or `ukf` for the host-side AHRS.
-* `-v/--verbose` – enable debug logging.
+```bash
+smartpen-gui --port COM6 --writer p01 --session day01 --prompts prompts/demo.txt
+```
 
-The GUI displays the live direction vector, quaternion, Euler angles, and raw
-accelerometer/gyroscope values alongside timing diagnostics.
+A terminal-only recorder is also available:
 
-## Serial packet format
+```bash
+smartpen-collect --port COM6 --writer p01 --session day01 --prompts prompts/demo.txt
+```
 
-The sketch emits fixed-length, 38-byte, little-endian packets to minimise
-latency and allow the host to recover from framing errors. Each packet contains:
+Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instructions and [firmware/README.md](firmware/README.md) for the full USB binary protocol.
 
-| Field          | Type     | Notes                                        |
-| -------------- | -------- | -------------------------------------------- |
-| `preamble`     | `uint16` | Constant `0xAA55` for synchronisation        |
-| `version`      | `uint16` | Protocol version (`1`)                       |
-| `sequence`     | `uint32` | Monotonic counter for dropout detection      |
-| `timestamp_ms` | `uint32` | `millis()` when the sample was captured      |
-| `ax_g` … `az_g`| `float`  | Acceleration in `g`                          |
-| `gx_dps` … `gz_dps` | `float` | Angular rate in degrees per second     |
-| `checksum`     | `uint16` | Sum of all previous bytes modulo `2^16`      |
+## What is implemented
 
-The Python GUI re-syncs to the preamble automatically and validates the checksum
-and version before passing each sample to the selected AHRS filter.
+- PlatformIO firmware for the XIAO ESP32-S3 and standalone LSM6DS3.
+- FIFO-based 208 Hz IMU acquisition, 400 kHz I2C, configurable sensor ranges in firmware.
+- Versioned, CRC16-checked binary USB frames with sample sequence counters and error telemetry.
+- Prompted Python terminal and optional PySide6 graphical recording tools.
+- Immutable raw binary streams and decoded NumPy arrays, plus JSON metadata and JSONL manifests.
+- Host unit tests and GitHub Actions Python/firmware builds.
 
-## Development
+**Not yet implemented:** model training, handwriting recognition, live plots, sensor calibration or automatic pen-contact detection.
 
-* Format and linting is intentionally lightweight; CI ensures that the
-  Python files compile and that the core utilities keep passing their unit
-  tests.
-* Run `python -m compileall xiao_mg24_ahrs_gui.py` and `pytest` locally before
-  committing to mirror the CI checks.
+## Hardware validation
+
+Continuous data capture has not yet been tested against your physical XIAO and breakout. The sensor is accepted only when WHO_AM_I is 0x69. Validate the sensor variant, USB interface, FIFO order, signal scale, clipping, and dropped-sample counters before collecting your main dataset.
+
+The 64-bit timestamps are reconstructed from the nominal 208 Hz sample grid; they are not timestamps directly measured by the IMU.
 
 ## License
 
-This project is released under the MIT License. See [LICENSE](LICENSE) for
-details.
-
-## ESP32-S3 + standalone LSM6DS3 handwriting capture (new)
-
-A separate, research-oriented data collection pipeline is being developed
-alongside the legacy XIAO MG24 viewer. See [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md)
-for setup, commands, recording format and hardware-validation cautions, and
-[firmware/README.md](firmware/README.md) for the binary protocol and wiring.
-
-The new Python package is under smartpen/, the new PlatformIO target under
-firmware/, and protocol/storage tests under tests/. The original MG24 tools
-and their 38-byte float packet protocol are **not** compatible with the new
-34-byte int16+CRC protocol; use the matching collector for each firmware.
-
+MIT; see [LICENSE](LICENSE).

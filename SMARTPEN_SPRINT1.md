@@ -1,17 +1,16 @@
 # SmartPen AI: sprint 1 quick start
 
-The existing XIAO MG24 Sense AHRS viewer remains unchanged. This directory
-adds an **independent** ESP32-S3 + standalone LSM6DS3 handwriting capture
-pipeline. It does not yet include handwriting recognition. A minimal optional
-PySide6 prompt-and-record GUI is included; live plotting is future work.
+The repository now targets only the **Seeed XIAO ESP32-S3 with a standalone LSM6DS3**.
+This sprint adds handwriting acquisition and prompted dataset collection; it does not
+yet include handwriting recognition. A minimal optional PySide6 prompt-and-record
+GUI is included; live plotting is future work.
 
 ## Before connecting the sensor
 
-The generic ESP32-S3 DevKitC-1 board target and GPIO8/9 in
-firmware/platformio.ini are placeholders. Confirm the exact ESP32-S3 board,
-its native USB interface, and which SDA/SCL pins are wired. Connect the
-breakout to 3.3-V-compatible power and logic, never assume 5-V tolerance.
-For I2C, follow your breakout's CS/SA0 wiring instructions.
+The PlatformIO target is now **seeed_xiao_esp32s3** and the standard exposed
+I2C pins are configured: XIAO **D4/SDA = GPIO5**, **D5/SCL = GPIO6**.
+Connect the breakout's VCC and GND to 3V3 and GND, respectively. Never
+assume 5-V-tolerant sensor logic; follow your breakout's CS/SA0 instructions.
 
 ## Install
 
@@ -20,7 +19,7 @@ Python 3.10+:
     python -m venv .venv
     # Windows: .venv\Scripts\activate
     # Linux/macOS: source .venv/bin/activate
-    pip install -e ".[test]"
+    pip install -e ".[test,gui]"
     pytest -q
 
 PlatformIO:
@@ -76,7 +75,7 @@ This is a basic prompted interface. It does not yet plot the six sensor axes.
 
 ## Validation limitations
 
-The hardware has not yet been flashed or tested against your actual ESP32-S3
+The hardware has not yet been flashed or tested against your XIAO ESP32-S3
 and standalone breakout. The firmware uses an LSM6DS3 WHO_AM_I=0x69
 check, FIFO at nominal 208 Hz and 400-kHz I2C. Its sample timestamps are
 **nominally reconstructed**, not sampled from a hardware time register.
