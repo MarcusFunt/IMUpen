@@ -56,6 +56,12 @@ class PersonalRecordings:
 
 
 @dataclass(frozen=True)
+class UnlabeledPersonalRecordings:
+    records: list[SequenceRecord]
+    rejected_recordings: int
+
+
+@dataclass(frozen=True)
 class PersonalSessionSplit:
     train: list[SequenceRecord]
     validation: list[SequenceRecord]
@@ -221,6 +227,83 @@ def load_personal_recordings(
     if not records:
         raise ValueError("recording set contains no accepted labeled recordings")
     return PersonalRecordings(records=records, rejected_recordings=rejected)
+
+
+def load_unlabeled_personal_recordings(
+    root: str | Path,
+) -> UnlabeledPersonalRecordings:
+    """Load accepted six-axis recordings while ignoring prompt labels entirely.
+
+    This accepts the recorder's metadata/NPZ layout, but does not read or
+    validate the prompt field. The returned ``SequenceRecord.text`` values are
+    empty and must only be used by self-supervised code.
+    """
+    root_path = Path(root).resolve()
+    metadata_paths = sorted((root_path / "metadata").rglob("*.json"))
+    if not metadata_paths:
+        raise FileNotFoundError(f"no recorder metadata found below {root_path / 'metadata'}")
+
+    records: list[SequenceRecord] = []
+    sample_ids: set[str] = set()
+    rejected = 0
+    for sample_index, metadata_path in enumerate(metadata_paths):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid recording metadata: {metadata_path}") from exc
+        if not isinstance(metadata, dict):
+            raise ValueError(f"recording metadata must be an object: {metadata_path}")
+        accepted = metadata.get("accepted")
+        if not isinstance(accepted, bool):
+            raise ValueError(f"recording metadata has no boolean accepted flag: {metadata_path}")
+        if not accepted:
+            rejected += 1
+            continue
+
+        sample_id = str(metadata.get("sample_id", "")).strip()
+        writer_id = str(metadata.get("writer_id", "")).strip()
+        session_id = str(metadata.get("session_id", "")).strip()
+        array_file = metadata.get("array_file")
+        if not sample_id or not writer_id or not session_id or not array_file:
+            raise ValueError(f"accepted recording metadata is incomplete: {metadata_path}")
+        if sample_id in sample_ids:
+            raise ValueError(f"duplicate sample_id in recording metadata: {sample_id}")
+        sample_ids.add(sample_id)
+
+        relative_array = Path(str(array_file))
+        if relative_array.is_absolute():
+            raise ValueError(f"recording array path must be relative: {array_file}")
+        array_path = (root_path / relative_array).resolve()
+        if not array_path.is_relative_to(root_path):
+            raise ValueError(f"recording array path escapes dataset root: {array_file}")
+        if not array_path.is_file():
+            raise FileNotFoundError(array_path)
+        try:
+            with np.load(array_path, allow_pickle=False) as archive:
+                if "axes" not in archive:
+                    raise ValueError(f"recording array has no axes channel: {array_path}")
+                features = select_six_axis(archive["axes"])
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise ValueError(f"invalid recorder array file: {array_path}") from exc
+        if len(features) == 0:
+            raise ValueError(f"accepted recording contains no samples: {sample_id}")
+        if not np.isfinite(features).all():
+            raise ValueError(f"recording contains non-finite IMU values: {sample_id}")
+        if "sample_count" in metadata and int(metadata["sample_count"]) != len(features):
+            raise ValueError(f"recording sample count does not match its array: {sample_id}")
+        records.append(
+            SequenceRecord(
+                features=features,
+                text="",
+                writer_id=writer_id,
+                sample_index=sample_index,
+                session_id=session_id,
+                sample_id=sample_id,
+            )
+        )
+    if not records:
+        raise ValueError("recording set contains no accepted unlabeled samples")
+    return UnlabeledPersonalRecordings(records=records, rejected_recordings=rejected)
 
 
 def split_personal_by_session(

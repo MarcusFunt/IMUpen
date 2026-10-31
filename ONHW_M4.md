@@ -62,6 +62,8 @@ M6-A uses an OnHW-trained M5 encoder to initialize fine-tuning on accepted perso
 
 M6-B compares temporal stretching, Gaussian sensor noise, per-axis bias/gain, physically consistent 3D rotations, and controlled sequence concatenation in isolated runs before an optional combined run. See [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for the reproducible training-only ablation workflow.
 
+M6-C adds TS2Vec-style self-supervised pretraining on unlabeled personal six-axis traces and compares encoder fine-tuning with training from scratch on the same labeled session split. Held-out validation sessions are excluded from self-supervised data. See [M6C_TS2VEC_PERSONAL_SSL.md](M6C_TS2VEC_PERSONAL_SSL.md) for setup and interpretation.
+
 | Fold | Seed | Train / validation samples | Epochs | CER | WER |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 0, writer-independent | 2026 | 64 / 64 | 1 | 94.03% (299 / 318 characters) | 100% (64 / 64 words) |

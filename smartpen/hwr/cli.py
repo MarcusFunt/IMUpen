@@ -7,7 +7,11 @@ from pathlib import Path
 
 from smartpen.hwr.data import PERSONAL_CHARSET
 from smartpen.hwr.model import MODEL_TYPES
-from smartpen.hwr.personal import run_onhw_encoder_pretraining, run_personal_comparison
+from smartpen.hwr.personal import (
+    run_onhw_encoder_pretraining,
+    run_personal_comparison,
+    run_personal_ts2vec_comparison,
+)
 from smartpen.hwr.training import (
     evaluate_checkpoint,
     run_augmentation_ablation,
@@ -70,6 +74,34 @@ def _parser() -> argparse.ArgumentParser:
     personalize.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     personalize.add_argument("--num-threads", type=int, default=4)
     personalize.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="use CUDA float16 autocast (defaults to enabled on CUDA)",
+    )
+
+    personalize_ssl = commands.add_parser(
+        "personalize-ssl",
+        help="compare TS2Vec-style personal self-supervision with labeled training from scratch",
+    )
+    personalize_ssl.add_argument("--recordings", required=True, help="labeled RecordingStore root")
+    personalize_ssl.add_argument(
+        "--unlabeled-recordings",
+        required=True,
+        help="accepted recorder sequences for SSL; prompt labels are ignored",
+    )
+    personalize_ssl.add_argument("--output", required=True)
+    personalize_ssl.add_argument("--charset", default=PERSONAL_CHARSET)
+    personalize_ssl.add_argument("--validation-fraction", type=float, default=0.2)
+    personalize_ssl.add_argument("--split-manifest", help="reuse an existing session_split.json")
+    personalize_ssl.add_argument("--ssl-epochs", type=int, default=20)
+    personalize_ssl.add_argument("--epochs", type=int, default=20, help="supervised fine-tuning epochs")
+    personalize_ssl.add_argument("--batch-size", type=int, default=16)
+    personalize_ssl.add_argument("--max-unlabeled-samples", type=int)
+    personalize_ssl.add_argument("--seed", type=int, default=1337)
+    personalize_ssl.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    personalize_ssl.add_argument("--num-threads", type=int, default=4)
+    personalize_ssl.add_argument(
         "--mixed-precision",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -198,6 +230,26 @@ def main() -> None:
             split_manifest_path=args.split_manifest,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            seed=args.seed,
+            device_name=args.device,
+            num_threads=args.num_threads,
+            mixed_precision=args.mixed_precision,
+        )
+        print(json.dumps(comparison, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "personalize-ssl":
+        comparison = run_personal_ts2vec_comparison(
+            recordings_dir=args.recordings,
+            unlabeled_recordings_dir=args.unlabeled_recordings,
+            output_dir=args.output,
+            charset=args.charset,
+            validation_fraction=args.validation_fraction,
+            split_manifest_path=args.split_manifest,
+            ssl_epochs=args.ssl_epochs,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            max_unlabeled_samples=args.max_unlabeled_samples,
             seed=args.seed,
             device_name=args.device,
             num_threads=args.num_threads,
