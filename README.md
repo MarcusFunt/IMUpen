@@ -66,7 +66,7 @@ Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instr
 
 ## Handwriting recognition (M4/M5/M6)
 
-The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for OnHW pretraining and personal-session fine-tuning, [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for augmentation ablations, and [M6C_TS2VEC_PERSONAL_SSL.md](M6C_TS2VEC_PERSONAL_SSL.md) for self-supervised pretraining on unlabeled personal recordings. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
+The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for OnHW pretraining and personal-session fine-tuning, [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for augmentation ablations, [M6C_TS2VEC_PERSONAL_SSL.md](M6C_TS2VEC_PERSONAL_SSL.md) for self-supervised pretraining on unlabeled personal recordings, and [M6D_ECHWR_PERSONAL_CONTRASTIVE.md](M6D_ECHWR_PERSONAL_CONTRASTIVE.md) for labeled personal sensor/text contrastive training. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
 
 ## Hardware validation
 

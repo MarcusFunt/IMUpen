@@ -64,6 +64,8 @@ M6-B compares temporal stretching, Gaussian sensor noise, per-axis bias/gain, ph
 
 M6-C adds TS2Vec-style self-supervised pretraining on unlabeled personal six-axis traces and compares encoder fine-tuning with training from scratch on the same labeled session split. Held-out validation sessions are excluded from self-supervised data. See [M6C_TS2VEC_PERSONAL_SSL.md](M6C_TS2VEC_PERSONAL_SSL.md) for setup and interpretation.
 
+M6-D adds ECHWR-style in-batch sensor/text alignment and edit-based hard-negative losses to personal CTC training, comparing all loss variants with the same session split and initialization. See [M6D_ECHWR_PERSONAL_CONTRASTIVE.md](M6D_ECHWR_PERSONAL_CONTRASTIVE.md) for the training workflow and limitations.
+
 | Fold | Seed | Train / validation samples | Epochs | CER | WER |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 0, writer-independent | 2026 | 64 / 64 | 1 | 94.03% (299 / 318 characters) | 100% (64 / 64 words) |
