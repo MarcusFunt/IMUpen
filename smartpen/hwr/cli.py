@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 from smartpen.hwr.data import PERSONAL_CHARSET
+from smartpen.hwr.augment import AUGMENTATION_NAMES
+from smartpen.hwr.echwr_training import run_personal_echwr_comparison
 from smartpen.hwr.model import MODEL_TYPES
 from smartpen.hwr.personal import (
     run_onhw_encoder_pretraining,
@@ -102,6 +104,40 @@ def _parser() -> argparse.ArgumentParser:
     personalize_ssl.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     personalize_ssl.add_argument("--num-threads", type=int, default=4)
     personalize_ssl.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="use CUDA float16 autocast (defaults to enabled on CUDA)",
+    )
+
+    personalize_echwr = commands.add_parser(
+        "personalize-echwr",
+        help="compare CTC, in-batch contrastive, and ECHWR-style hard-negative training",
+    )
+    personalize_echwr.add_argument("--recordings", required=True, help="labeled RecordingStore root")
+    personalize_echwr.add_argument("--output", required=True)
+    personalize_echwr.add_argument(
+        "--pretrained-checkpoint",
+        help="optional M6-A OnHW encoder checkpoint shared by every comparison variant",
+    )
+    personalize_echwr.add_argument("--charset", default=PERSONAL_CHARSET)
+    personalize_echwr.add_argument("--validation-fraction", type=float, default=0.2)
+    personalize_echwr.add_argument("--split-manifest", help="reuse an existing session_split.json")
+    personalize_echwr.add_argument("--epochs", type=int, default=20)
+    personalize_echwr.add_argument("--batch-size", type=int, default=16)
+    personalize_echwr.add_argument("--max-train-samples", type=int)
+    personalize_echwr.add_argument("--max-validation-samples", type=int)
+    personalize_echwr.add_argument("--seed", type=int, default=1337)
+    personalize_echwr.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    personalize_echwr.add_argument("--num-threads", type=int, default=4)
+    personalize_echwr.add_argument("--batch-contrastive-weight", type=float, default=1.0)
+    personalize_echwr.add_argument("--error-contrastive-weight", type=float, default=1.0)
+    personalize_echwr.add_argument("--negative-sets", type=int, default=1)
+    personalize_echwr.add_argument(
+        "--augmentation", choices=AUGMENTATION_NAMES, default="none",
+        help="same M6-B training-only augmentation for all three variants",
+    )
+    personalize_echwr.add_argument(
         "--mixed-precision",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -254,6 +290,30 @@ def main() -> None:
             device_name=args.device,
             num_threads=args.num_threads,
             mixed_precision=args.mixed_precision,
+        )
+        print(json.dumps(comparison, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "personalize-echwr":
+        comparison = run_personal_echwr_comparison(
+            recordings_dir=args.recordings,
+            output_dir=args.output,
+            pretrained_checkpoint=args.pretrained_checkpoint,
+            charset=args.charset,
+            validation_fraction=args.validation_fraction,
+            split_manifest_path=args.split_manifest,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            max_train_samples=args.max_train_samples,
+            max_validation_samples=args.max_validation_samples,
+            seed=args.seed,
+            device_name=args.device,
+            num_threads=args.num_threads,
+            mixed_precision=args.mixed_precision,
+            batch_contrastive_weight=args.batch_contrastive_weight,
+            error_contrastive_weight=args.error_contrastive_weight,
+            negative_sets=args.negative_sets,
+            augmentation=args.augmentation,
         )
         print(json.dumps(comparison, ensure_ascii=False, indent=2))
         return
