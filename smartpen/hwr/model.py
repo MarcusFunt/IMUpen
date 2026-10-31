@@ -180,9 +180,10 @@ class ResNetBiLSTMCTC(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(hidden_size * 2, num_classes)
 
-    def forward(
+    def encode_temporal(
         self, inputs: torch.Tensor, lengths: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return per-timestep BiLSTM features before the CTC projection head."""
         if inputs.ndim != 3 or inputs.shape[-1] != self.input_channels:
             raise ValueError(
                 f"inputs must have shape (batch, time, {self.input_channels})"
@@ -213,7 +214,13 @@ class ResNetBiLSTMCTC(nn.Module):
         recurrent, _ = pad_packed_sequence(
             recurrent, batch_first=True, total_length=features.shape[1]
         )
-        return self.classifier(self.dropout(recurrent)), output_lengths
+        return recurrent, output_lengths
+
+    def forward(
+        self, inputs: torch.Tensor, lengths: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        features, output_lengths = self.encode_temporal(inputs, lengths)
+        return self.classifier(self.dropout(features)), output_lengths
 
 
 def _mask_temporal_padding(features: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
