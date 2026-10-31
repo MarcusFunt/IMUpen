@@ -1065,7 +1065,7 @@ def run_training(
             "selected_validation_loss": best_validation_loss,
             "selected_error_score": best_validation_wer,
             "selected_error_score_name": (
-                "character_error_rate"
+                "character_classification_error_rate"
                 if metric_mode == "single_character"
                 else "word_error_rate"
             ),
@@ -1167,6 +1167,10 @@ def evaluate_checkpoint(
         checkpoint.get("sensor_profile_id", "front_acc_gyro6")
     )
     profiled_validation = apply_sensor_profile(fold_data.validation, profile.profile_id)
+    if not writer_ids_available and any(
+        record.writer_id is not None for record in profiled_validation
+    ):
+        raise ValueError("writer_ids_available=False requires unknown writer IDs to remain null")
     if any(character not in active_charset for record in profiled_validation
            for character in record.text):
         raise ValueError("a reference contains a character outside label_charset")
@@ -1228,6 +1232,8 @@ def evaluate_checkpoint(
             else "word-sequence recognition"
         ),
         "metric_mode": metric_mode,
+        "label_charset": active_charset,
+        "ctc_blank_index": blank_index,
         "protocol": protocol_label or fold_data.split_family,
         "official_split_summary": dataset_summary or _official_split_summary(fold_data),
         "sensor_profile_id": profile.profile_id,

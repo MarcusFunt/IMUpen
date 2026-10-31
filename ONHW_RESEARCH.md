@@ -159,7 +159,14 @@ OnHW-Chars is a different corpus from Words500. It contains single handwritten l
 
 The loader counts and drops empty traces, rejects malformed or non-finite examples, and resolves exact duplicate traces deterministically (test copy takes priority across partitions). Each experiment makes a fixed stratified development split from the official training partition for checkpoint selection; the official test partition is evaluated once after selection. The CTC output alphabet is restricted to the selected corpus variant. Primary metrics are exact character accuracy, balanced accuracy, macro-F1, per-class precision/recall/F1, and the confusion matrix. Word error rate is not defined for this character task.
 
-Example configuration for the full `both` writer-independent screen across every measured sensor profile and all five folds:
+The practical primary configuration uses the combined `both` alphabet, both official protocols, all five folds, and the seven profiles needed for the six registered sensor comparisons:
+
+```bash
+smartpen-hwr run-chars-sweep --config experiments/onhw_chars_primary_sweep.json --output runs/onhw-chars --dry-run
+smartpen-hwr run-chars-sweep --config experiments/onhw_chars_primary_sweep.json --output runs/onhw-chars
+```
+
+It uses one M5 seed and ten epochs with no sample caps. The full 31-profile writer-independent expansion is separately registered in `experiments/onhw_chars_screen.json`; profile rankings from that exploratory matrix require independent confirmation. A full `both` writer-independent screen across all 31 profiles and all five folds can also be configured as follows:
 
 ```json
 {

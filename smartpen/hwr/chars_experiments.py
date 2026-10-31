@@ -185,6 +185,10 @@ def _chars_run_config(
     sensor_profile: str,
     seed: int,
 ) -> dict:
+    def sample_id_digest(records: list[SequenceRecord]) -> str:
+        payload = "\n".join(record.sample_id or "" for record in records).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
     return {
         "dataset": "OnHW-Chars",
         "label_charset": "".join(ONHW_CHARS_ALPHABETS[fold.corpus]),
@@ -204,8 +208,8 @@ def _chars_run_config(
         "model_config": config["model_config"],
         "max_train_samples": config["max_train_samples"],
         "max_validation_samples": config["max_validation_samples"],
-        "official_train_sample_ids": [record.sample_id for record in fold.train],
-        "official_test_sample_ids": [record.sample_id for record in fold.test],
+        "official_train_sample_id_sha256": sample_id_digest(fold.train),
+        "official_test_sample_id_sha256": sample_id_digest(fold.test),
         "data_quality": fold.data_quality,
     }
 
@@ -425,6 +429,7 @@ def _run_chars_cell(
             "sample_count": metrics["sample_count"],
             "invalid_prediction_count": metrics["invalid_prediction_count"],
             "labels": metrics["labels"],
+            "prediction_labels": metrics["prediction_labels"],
             "confusion_matrix": metrics["confusion_matrix"],
             "model_parameters": evaluation["model_parameters"],
             "training_seconds_total_recorded": sum(
@@ -483,37 +488,35 @@ def _aggregate_chars_runs(rows: list[dict], correctness: dict[str, dict[str, boo
             for label, values in entry["per_class"].items():
                 for field in ("correct_count", "reference_count", "predicted_count"):
                     class_accumulator[label][field] += values[field]
-        per_class_summaries[summary_key] = {
-            label: {
+        aggregate_classes = {}
+        for label, values in sorted(class_accumulator.items()):
+            recall = values["correct_count"] / max(values["reference_count"], 1)
+            precision = values["correct_count"] / max(values["predicted_count"], 1)
+            aggregate_classes[label] = {
                 **values,
-                "recall": values["correct_count"] / max(values["reference_count"], 1),
-                "precision": values["correct_count"] / max(values["predicted_count"], 1),
-                "f1": (
-                    2
-                    * values["correct_count"] / max(values["predicted_count"], 1)
-                    * values["correct_count"] / max(values["reference_count"], 1)
-                    / max(
-                        values["correct_count"] / max(values["predicted_count"], 1)
-                        + values["correct_count"] / max(values["reference_count"], 1),
-                        1e-12,
-                    )
-                ),
+                "recall": recall,
+                "precision": precision,
+                "f1": 2 * precision * recall / max(precision + recall, 1e-12),
             }
-            for label, values in sorted(class_accumulator.items())
-        }
+        per_class_summaries[summary_key] = aggregate_classes
         labels = entries[0]["labels"]
+        prediction_labels = entries[0]["prediction_labels"]
         pooled_confusion = [
-            [0 for _ in labels]
+            [0 for _ in prediction_labels]
             for _ in labels
         ]
         for entry in entries:
-            if entry["labels"] != labels:
+            if (
+                entry["labels"] != labels
+                or entry["prediction_labels"] != prediction_labels
+            ):
                 raise ValueError("OnHW-Chars label order differs within an aggregate group")
             for row_index, confusion_row in enumerate(entry["confusion_matrix"]):
                 for column_index, value in enumerate(confusion_row):
                     pooled_confusion[row_index][column_index] += int(value)
         confusion_summaries[summary_key] = {
             "labels": labels,
+            "prediction_labels": prediction_labels,
             "confusion_matrix": pooled_confusion,
             "interpretation": "sum over official held-out fold evaluations; not deduplicated recordings",
         }

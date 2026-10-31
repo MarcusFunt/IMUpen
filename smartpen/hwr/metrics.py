@@ -77,7 +77,9 @@ def single_character_metrics(
         raise ValueError("every reference character must appear in labels")
 
     label_index = {label: index for index, label in enumerate(class_labels)}
-    confusion = [[0 for _ in class_labels] for _ in class_labels]
+    invalid_label = "<invalid>"
+    prediction_labels = [*class_labels, invalid_label]
+    confusion = [[0 for _ in prediction_labels] for _ in class_labels]
     counts = {label: 0 for label in class_labels}
     correct = {label: 0 for label in class_labels}
     predicted_counts = {label: 0 for label in class_labels}
@@ -90,6 +92,7 @@ def single_character_metrics(
             confusion[label_index[reference]][label_index[hypothesis]] += 1
         else:
             invalid_predictions += 1
+            confusion[label_index[reference]][-1] += 1
         if hypothesis == reference:
             exact += 1
             correct[reference] += 1
@@ -126,6 +129,7 @@ def single_character_metrics(
         result.update(
             {
                 "labels": class_labels,
+                "prediction_labels": prediction_labels,
                 "per_class": per_class,
                 "confusion_matrix": confusion,
             }
