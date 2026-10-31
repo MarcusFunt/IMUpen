@@ -1,10 +1,10 @@
 # Milestone M4: six-axis handwriting recognition
 
-M4 adds an optional PyTorch CNN-BiLSTM-CTC recognizer for variable-length IMU recordings. It uses the same six semantic channels as the XIAO ESP32-S3 recorder: front accelerometer x/y/z followed by gyroscope x/y/z. Firmware, the serial protocol, and recording formats remain unchanged.
+M4 is the original PyTorch CNN-BiLSTM-CTC recognizer for variable-length sensor recordings. It accepts any supported OnHW input-channel count; `front_acc_gyro6` remains the default profile to preserve the original baseline. The OnHW loader retains the complete measured 13-channel sequence and the training pipeline selects the requested profile. The prototype XIAO collector still stores its own six-axis recordings. See [ONHW_RESEARCH.md](ONHW_RESEARCH.md) for the current research plan and protocol definitions.
 
 ## Dataset and permitted use
 
-Use the right-handed **OnHW-Words500 writer-independent** archive from the [Fraunhofer IIS dataset page](https://www.iis.fraunhofer.de/de/ff/lv/dataanalytics/anwproj/schreibtrainer/onhw-dataset.html). The archive ships five writer-independent folds. Each fold provides its own training and validation partitions; this project uses those partitions as published and checks that writer IDs do not overlap.
+Use the OnHW-Words500 archives from the [Fraunhofer IIS dataset page](https://www.iis.fraunhofer.de/de/ff/lv/dataanalytics/anwproj/schreibtrainer/onhw-dataset.html). The loader supports the official writer-dependent and writer-independent variants and preserves their published fold membership. WD has familiar writers and held-out word identities; WI has unseen writers and shared vocabulary. They are distinct benchmarks, not a causal writer-familiarity comparison.
 
 The OnHW dataset is separate from this repository's MIT-licensed code. The dataset author's [license statement](https://huggingface.co/datasets/FelixOtt/OnHW_datasets) identifies OnHW data as **CC BY-NC 4.0**: use, sharing, and adaptation require attribution and are limited to non-commercial purposes. Include the [license](https://creativecommons.org/licenses/by-nc/4.0/) and the dataset citation in derivative research. Commercial use is not permitted by that license. Do not commit the archive, extracted recordings, or trained checkpoints to this repository.
 

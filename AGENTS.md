@@ -1,14 +1,14 @@
 ## Project Context
 
-A Python project with 25 files across 7 directories.
+A Python project with 54 files across 9 directories.
 
 ## Stack
 
 **Languages:**
-- Python (68%)
-- C++ (16%)
-- C (11%)
-- TOML (5%)
+- Python (83%)
+- C++ (8%)
+- C (6%)
+- TOML (3%)
 
 **Frameworks & Tools:**
 - pytest (testing)
@@ -20,6 +20,7 @@ pytest  # test
 smartpen-collect  # smartpen-collect
 smartpen-replay  # smartpen-replay
 smartpen-gui  # smartpen-gui
+smartpen-hwr  # smartpen-hwr
 ```
 
 ## Conventions
@@ -34,6 +35,7 @@ smartpen-gui  # smartpen-gui
 **Key directories:**
 - `firmware/`
 - `prompts/`
+- `reports/`
 - `smartpen/`
 - `tests/` - Test files
 
@@ -54,4 +56,4 @@ smartpen-gui  # smartpen-gui
 - Delete or overwrite test files without understanding them
 - Force push to main/master branch
 
-<!-- agentseed:meta {"sha":"9b2234de2122da20937181f44bda5b48e704124e","timestamp":"2026-10-30T09:45:47.033Z","format":"agentseed-v1"} -->
+<!-- agentseed:meta {"sha":"9ca15a36c904b971a7b87afd9fbaee6a0358af33","timestamp":"2026-10-31T14:23:01.743Z","format":"agentseed-v1"} -->

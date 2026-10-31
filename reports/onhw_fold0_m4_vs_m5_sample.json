@@ -256,6 +256,6 @@
       "run_directory": "resnet_bilstm_ctc"
     }
   },
-  "interpretation": "Sample-capped experiment; use as an implementation comparison only. It is not a full-fold benchmark or a claim of improved handwriting accuracy.",
+  "interpretation": "Sample-capped integration smoke test only; use to verify execution, not as an accuracy benchmark or claim of improved handwriting accuracy.",
   "measured_at_utc": "2026-10-30T10:30:29.238530+00:00"
 }

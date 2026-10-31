@@ -1,6 +1,6 @@
-# Milestone M6-B: six-axis IMU augmentation ablations
+# Milestone M6-B: measured-sensor augmentation ablations
 
-M6-B adds reproducible, training-only augmentation experiments for the M5 ResNet-BiLSTM-CTC recognizer. It runs a baseline and five independent ablations on the same official OnHW writer-independent fold, sample indexes, seed, model, optimizer, epoch count, and training-only normalization. The optional combined run is scheduled after every isolated experiment.
+M6-B adds reproducible, training-only augmentation experiments for the M5 ResNet-BiLSTM-CTC recognizer. It runs a baseline and five independent ablations on the same official OnHW fold, profile, sample indexes, seed, model, optimizer, epoch count, and training-only normalization. Transforms support variable channel counts; 3D rotation uses complete measured XYZ groups and leaves scalar force untouched. The optional combined run is scheduled after every isolated experiment.
 
 The recorder, USB protocol, and ESP32-S3 firmware are unchanged. OnHW-Words500 is licensed separately from this repository under CC BY-NC 4.0; follow the attribution and non-commercial terms in [ONHW_M4.md](ONHW_M4.md). The dataset archive and model checkpoints are not committed.
 

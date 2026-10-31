@@ -1,78 +1,45 @@
-# IMUpen — XIAO ESP32-S3 + LSM6DS3 SmartPen
+# IMUpen
 
-A personalized handwriting-data collection platform for a **Seeed Studio XIAO ESP32-S3** connected to a **standalone ST LSM6DS3 six-axis IMU**. The firmware reads an accelerometer and gyroscope, streams framed binary packets over native USB CDC, and the Python application records labeled handwriting samples for later machine-learning experiments.
+IMUpen is a research platform for inertial handwriting recognition. Its next milestone is a reproducible experimental sweep on the measured OnHW-Words500 recordings. The physical pen remains a separate prototype and data-collection track; the immediate research work does not depend on choosing new hardware.
 
-## Hardware connections
+## Research workflow
 
-Connect your standalone LSM6DS3 breakout to the XIAO ESP32-S3's exposed I2C pads:
+The recognition code keeps the complete OnHW sensor array and selects one declared sensor profile per experiment. It supports the official writer-dependent and writer-independent folds, variable-channel M4/M5 models, train-only normalization, checkpoint provenance, greedy CTC decoding, and machine-readable metrics.
 
-| LSM6DS3 breakout | XIAO ESP32-S3 pad | Chip GPIO |
-| --- | --- | --- |
-| SDA | D4 / SDA | GPIO5 |
-| SCL | D5 / SCL | GPIO6 |
-| VCC | 3V3 | — |
-| GND | GND | — |
+Start with the [OnHW research guide](ONHW_RESEARCH.md) for the 13-channel schema, all 31 supported profiles, official split interpretation, experiment commands, and limitations. Existing method notes cover [M4](ONHW_M4.md), [M5](M5_RESNET_BILSTM.md), [M6-A](M6A_ONHW_PRETRAINING.md), [M6-B](M6B_IMU_AUGMENTATION.md), [M6-C](M6C_TS2VEC_PERSONAL_SSL.md), and [M6-D](M6D_ECHWR_PERSONAL_CONTRASTIVE.md).
 
-Use **3.3 V logic**. Check the breakout's power requirements and whether it needs pull-up resistors. If it exposes CS, follow the module's instructions for I2C mode (typically CS high). SA0/SDO controls I2C address; firmware probes 0x6A and 0x6B.
+Install the optional ML dependencies with `python -m pip install -e ".[ml]"`. A minimal JSON configuration for one M4 or M5 official-fold experiment is:
 
-The PlatformIO target and pin assignments are set to the XIAO ESP32-S3; no board-pin edits are needed for these connections.
-
-## Quick start
-
-Install Python 3.10+, PlatformIO, and dependencies:
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-python -m pip install -e ".[test,gui]"
-python -m pytest -q
+```json
+{
+  "data": "C:/datasets/OnHW-words500_indep.zip",
+  "fold": 0,
+  "sensor_profile": "front_acc_gyro6",
+  "model_type": "resnet_bilstm_ctc",
+  "seed": 1337,
+  "epochs": 10,
+  "batch_size": 32,
+  "device": "auto",
+  "num_threads": 4,
+  "protocol": "writer_independent"
+}
 ```
 
-Build and flash the XIAO ESP32-S3:
+Run it with `smartpen-hwr run-experiment --config experiments/onhw_m5.json --output results/onhw`. Add `--dry-run` to validate the archive, fold, profile, and CTC-feasible sample plan. Completed runs are skipped when their artifact hashes still match; interrupted runs resume from the last completed epoch. Sample caps are available for pipeline checks, and those reports are labeled as smoke tests rather than accuracy benchmarks.
 
-```bash
-cd firmware
-pio run
-pio run -t upload
-cd ..
-```
+Run a configured profile × model × fold × seed screen with `smartpen-hwr run-sweep`; `experiments/onhw_primary_sensor_screen.json` covers the six prespecified sensor comparisons. Use `--dry-run` before training. The sweep preserves failures and writes descriptive summaries and paired sensor differences.
 
-Connect to its USB CDC serial port (replace COM6 with the port on your computer) and start the graphical prompted handwriting recorder:
+For a matched writer × vocabulary development experiment, use `smartpen-hwr run-factorial` with target writer IDs. The runner fixes the query recordings across W0V0, W0V1, W1V0, and W1V1, writes cell manifests, and reports paired macro-writer effects with writer-level bootstrap intervals. These custom runs are clearly marked and do not replace either official benchmark.
 
-```bash
-smartpen-gui --port COM6 --writer p01 --session day01 --prompts prompts/demo.txt
-```
+## Prototype collection track
 
-A terminal-only recorder is also available:
+The repository also contains firmware and Python collection tools for a Seeed Studio XIAO ESP32-S3 and standalone ST LSM6DS3. That hardware setup is not the OnHW DigiPen and its recordings do not establish the value of OnHW sensor placements. The [Sprint 1 document](SMARTPEN_SPRINT1.md) is retained as a historical collection milestone. Hardware integration and continuous-stream word segmentation remain future work.
 
-```bash
-smartpen-collect --port COM6 --writer p01 --session day01 --prompts prompts/demo.txt
-```
+## Development
 
-Review [SMARTPEN_SPRINT1.md](SMARTPEN_SPRINT1.md) for recording and replay instructions and [firmware/README.md](firmware/README.md) for the full USB binary protocol.
+Install test and GUI dependencies with `python -m pip install -e ".[test,gui]"`. Run `python -m pytest -q` for the host test suite. The OnHW dataset is separate from this MIT-licensed repository and must be obtained from its maintainers.
 
-## What is implemented
-
-- PlatformIO firmware for the XIAO ESP32-S3 and standalone LSM6DS3.
-- FIFO-based 208 Hz IMU acquisition, 400 kHz I2C, configurable sensor ranges in firmware.
-- Versioned, CRC16-checked binary USB frames with sample sequence counters and error telemetry.
-- Prompted Python terminal and optional PySide6 graphical recording tools.
-- Immutable raw binary streams and decoded NumPy arrays, plus JSON metadata and JSONL manifests.
-- Optional six-axis CNN-BiLSTM-CTC baseline, residual CNN-BiLSTM-CTC model, and OnHW-to-personal encoder fine-tuning with session-held-out CER/WER reporting.
-- Host unit tests and GitHub Actions Python/firmware builds.
-
-**Not yet implemented:** live plots, sensor calibration or automatic pen-contact detection.
-
-## Handwriting recognition (M4/M5/M6)
-
-The recognizers are an optional install so the recorder does not need the PyTorch runtime. To train or evaluate, install `python -m pip install -e ".[ml]"`. Follow [ONHW_M4.md](ONHW_M4.md) for dataset and baseline details, [M5_RESNET_BILSTM.md](M5_RESNET_BILSTM.md) for the residual architecture, [M6A_ONHW_PRETRAINING.md](M6A_ONHW_PRETRAINING.md) for OnHW pretraining and personal-session fine-tuning, [M6B_IMU_AUGMENTATION.md](M6B_IMU_AUGMENTATION.md) for augmentation ablations, [M6C_TS2VEC_PERSONAL_SSL.md](M6C_TS2VEC_PERSONAL_SSL.md) for self-supervised pretraining on unlabeled personal recordings, and [M6D_ECHWR_PERSONAL_CONTRASTIVE.md](M6D_ECHWR_PERSONAL_CONTRASTIVE.md) for labeled personal sensor/text contrastive training. The OnHW dataset is separate from the MIT-licensed code and is not stored in this repository.
-
-## Hardware validation
-
-Continuous data capture has not yet been tested against your physical XIAO and breakout. The sensor is accepted only when WHO_AM_I is 0x69. Validate the sensor variant, USB interface, FIFO order, signal scale, clipping, and dropped-sample counters before collecting your main dataset.
-
-The 64-bit timestamps are reconstructed from the nominal 208 Hz sample grid; they are not timestamps directly measured by the IMU.
+See [firmware/README.md](firmware/README.md) for the USB protocol and collector instructions. The timestamp grid is nominally 208 Hz for the prototype firmware; OnHW-Words500 is recorded at 100 Hz. Keep those data sources and rates distinct.
 
 ## License
 

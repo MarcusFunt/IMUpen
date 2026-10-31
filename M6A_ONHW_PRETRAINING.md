@@ -6,7 +6,7 @@ The experiment is optional host-side PyTorch code. It does not change the record
 
 ## 1. Pretrain on OnHW
 
-Download the writer-independent OnHW-Words500 archive from the [Fraunhofer IIS dataset page](https://www.iis.fraunhofer.de/de/ff/lv/dataanalytics/anwproj/schreibtrainer/onhw-dataset.html). The adapter selects the same six channels as M5: front accelerometer x/y/z and gyroscope x/y/z.
+Download the writer-independent OnHW-Words500 archive from the [Fraunhofer IIS dataset page](https://www.iis.fraunhofer.de/de/ff/lv/dataanalytics/anwproj/schreibtrainer/onhw-dataset.html). The loader keeps all 13 channels and the command selects one registered profile; the default is M5's original `front_acc_gyro6`. Encoder transfer requires a matching sensor profile as well as matching input-channel and encoder dimensions. A profile mismatch is rejected instead of loading incompatible input weights.
 
 ```bash
 python -m pip install -e ".[ml,test]"

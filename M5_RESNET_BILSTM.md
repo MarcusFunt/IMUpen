@@ -1,13 +1,13 @@
 # Milestone M5: residual CNN-BiLSTM-CTC
 
-M5 adds a larger residual 1D CNN encoder while retaining the M4 CNN-BiLSTM-CTC baseline. Both architectures use the same six-axis OnHW adapter, character vocabulary, writer-independent fold, train-only normalization, CTC loss, greedy decoder, and CER/WER evaluator. The model is host-side PyTorch code; firmware and the XIAO ESP32-S3 recorder are unchanged.
+M5 adds a larger residual 1D CNN encoder while retaining the M4 CNN-BiLSTM-CTC baseline. Both architectures accept the selected number of channels from any registered OnHW sensor profile. The default remains `front_acc_gyro6` for backward compatibility. The primary loader retains the full 13-channel sequence; profile projection, train-only normalization, CTC loss, greedy decoding, and paired reporting happen in the host-side training pipeline. See [ONHW_RESEARCH.md](ONHW_RESEARCH.md) for the current research workflow and official WD/WI meanings.
 
 ## Architecture
 
 The default M5 model uses:
 
 ```text
-IMU sequence [time, 6]
+IMU sequence [time, selected profile channels]
   → 64-channel stride-2 input projection
   → residual 1D CNN blocks: 64 → 64 → 128 → 256 channels
   → total temporal downsampling ×4
@@ -16,7 +16,7 @@ IMU sequence [time, 6]
   → CTC loss / greedy decoding
 ```
 
-Residual blocks use two 1D convolutions and a projected skip when channel width or stride changes. Per-timestep channel layer normalization keeps padded batch positions from changing valid sample statistics. The default configuration is intended to land in the 4–8 million trainable parameter range; every run records its exact count. Channels, recurrent width, layer count, and dropout are configurable through the Python API.
+Residual blocks use two 1D convolutions and a projected skip when channel width or stride changes. Per-timestep channel layer normalization keeps padded batch positions from changing valid sample statistics. The default configuration is intended to land in the 4–8 million trainable parameter range; every run records its exact count. Input channels, convolution widths, recurrent width, layer count, and dropout are configurable through the Python API. Checkpoints record the profile ID, ordered channel names and indices, units, preprocessing, and sample rate. A profile whose dimensions do not match a custom model configuration is rejected.
 
 Training uses the M4 AdamW settings and gradient clipping. CUDA runs enable float16 autocast by default; pass `--no-mixed-precision` to disable it or `--mixed-precision` to request it explicitly. Mixed precision is only supported on CUDA. CTC log probabilities and loss remain float32 for stability.
 
@@ -31,7 +31,7 @@ python -m smartpen.hwr.cli compare \
   --fold 0 --epochs 30 --batch-size 24 --seed 2026 --device cuda
 ```
 
-It writes one checkpoint and metrics file per model plus `comparison.json`, which includes fairness checks, parameter counts, and per-epoch CER/WER. Both runs select the same records deterministically. This is a same-fold model comparison, not a five-fold benchmark; publish or compare aggregate claims only after running every official fold.
+It writes one checkpoint and metrics file per model plus `comparison.json`, which includes fairness checks, parameter counts, per-writer metrics, paired predictions, and paired writer-bootstrap differences. Both runs select the same records deterministically. This is a same-fold model comparison, not a five-fold benchmark; publish or compare aggregate claims only after running every official fold.
 
 For a short pipeline check, cap the data and epochs. The output is explicitly marked as a sample experiment:
 

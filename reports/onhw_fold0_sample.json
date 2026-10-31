@@ -215,6 +215,6 @@
     "wer": 1.0
   },
   "measured_at_utc": "2026-10-30T10:07:18.040442+00:00",
-  "interpretation": "Measured on this run's sampled held-out writers; not a full-fold benchmark and not directly comparable to published results.",
+  "interpretation": "Sample-capped integration smoke test only; not an accuracy benchmark, full-fold benchmark, or result comparable to published results.",
   "checkpoint": "model.pt"
 }

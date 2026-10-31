@@ -1,5 +1,11 @@
 # SmartPen AI: sprint 1 quick start
 
+> **Historical collection milestone.** This document describes the XIAO/LSM6DS3
+> prototype work and its original sprint scope. The current project milestone is
+> OnHW-Words500 research; follow [ONHW_RESEARCH.md](ONHW_RESEARCH.md) for the
+> current data, sensor-profile, benchmark, and experiment decisions. Sprint 1
+> hardware assumptions do not define OnHW research experiments.
+
 The repository now targets only the **Seeed XIAO ESP32-S3 with a standalone LSM6DS3**.
 This sprint adds handwriting acquisition and prompted dataset collection; it does not
 yet include handwriting recognition. A minimal optional PySide6 prompt-and-record
