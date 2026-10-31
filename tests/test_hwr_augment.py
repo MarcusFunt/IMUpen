@@ -11,6 +11,7 @@ from smartpen.hwr.augment import (
     concatenate_training_records,
 )
 from smartpen.hwr.data import ONHW_BLANK_INDEX, SequenceRecord, encode_text
+from smartpen.hwr.sensors import ONHW_CHANNEL_NAMES
 from smartpen.hwr.training import (
     _AugmentedRecordDataset,
     run_augmentation_ablation,
@@ -72,6 +73,32 @@ def test_rotation_applies_one_rigid_transform_to_acceleration_and_gyro():
         )
 
 
+def test_sensor_augmentations_support_full_13_channel_profiles_and_keep_force_scalar():
+    values = np.arange(13 * 40, dtype=np.float32).reshape(40, 13)
+    record = SequenceRecord(
+        features=values,
+        text="A",
+        writer_id="w1",
+        channel_names=ONHW_CHANNEL_NAMES,
+        content_sha256="original-fingerprint",
+    )
+    bias_gain = apply_augmentation(
+        record,
+        "sensor_bias_gain",
+        np.random.default_rng(6),
+        np.ones(13, dtype=np.float32),
+    )
+    rotated = apply_augmentation(
+        record,
+        "rotation_3d",
+        np.random.default_rng(7),
+        np.ones(13, dtype=np.float32),
+    )
+
+    assert bias_gain.features.shape == rotated.features.shape == (40, 13)
+    assert bias_gain.content_sha256 is None
+    assert rotated.content_sha256 is None
+    np.testing.assert_array_equal(rotated.features[:, 12], values[:, 12])
 def test_concatenation_is_reproducible_and_stays_within_writer_session():
     records = [
         _record("A", "w1", "s1", 0, 1),
@@ -117,6 +144,7 @@ def test_ablation_runner_uses_common_data_and_records_all_independent_variants(
         return {
             "run_kind": "sample",
             "dataset": "OnHW-Words500 writer-independent",
+            "sensor_profile": {"profile_id": kwargs["sensor_profile"]},
             "archive_sha256": "archive",
             "fold": kwargs["fold"],
             "seed": kwargs["seed"],
@@ -190,7 +218,11 @@ def test_sequence_concat_runs_through_ctc_training_without_touching_validation(t
     with zipfile.ZipFile(archive_path, "w") as archive:
         for split, writer_ids in (("train", (1, 1)), ("val", (90, 90))):
             sequences = [
-                np.full((32, 13), index + 0.25, dtype=np.float32)
+                np.full(
+                    (32, 13),
+                    index + (0.25 if split == "train" else 10.25),
+                    dtype=np.float32,
+                )
                 for index, _ in enumerate(writer_ids)
             ]
             labels = [

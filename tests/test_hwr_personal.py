@@ -164,6 +164,7 @@ def test_pretrained_encoder_copies_only_non_classifier_weights(tmp_path):
         {
             "model_type": "resnet_bilstm_ctc",
             "training_stage": "onhw_encoder_pretraining",
+            "sensor_profile_id": "front_acc_gyro6",
             "model_config": source_config,
             "model_state": source.state_dict(),
             "training_report": {"dataset": "OnHW-Words500 writer-independent"},
@@ -175,7 +176,11 @@ def test_pretrained_encoder_copies_only_non_classifier_weights(tmp_path):
     target._m6_model_config = target_config
     initial_head = {key: value.clone() for key, value in target.classifier.state_dict().items()}
 
-    metadata = load_pretrained_encoder(target, checkpoint_path)
+    metadata = load_pretrained_encoder(
+        target,
+        checkpoint_path,
+        target_sensor_profile_id="front_acc_gyro6",
+    )
 
     torch.testing.assert_close(target.stem[0].weight, source.stem[0].weight)
     torch.testing.assert_close(
@@ -184,6 +189,29 @@ def test_pretrained_encoder_copies_only_non_classifier_weights(tmp_path):
     for key, value in target.classifier.state_dict().items():
         torch.testing.assert_close(value, initial_head[key])
     assert metadata["classifier_head_transferred"] is False
+    assert metadata["source_sensor_profile_id"] == "front_acc_gyro6"
+
+    incompatible_path = tmp_path / "different-profile.pt"
+    torch.save(
+        {
+            "model_type": "resnet_bilstm_ctc",
+            "training_stage": "onhw_encoder_pretraining",
+            "sensor_profile_id": "dual_acc6",
+            "model_config": source_config,
+            "model_state": source.state_dict(),
+            "training_report": {
+                "dataset": "OnHW-Words500",
+                "protocol": "writer_independent",
+            },
+        },
+        incompatible_path,
+    )
+    with pytest.raises(ValueError, match="input profile is incompatible"):
+        load_pretrained_encoder(
+            target,
+            incompatible_path,
+            target_sensor_profile_id="front_acc_gyro6",
+        )
 
 
 def test_m6a_personal_comparison_runs_both_initializations_on_held_out_sessions(tmp_path):

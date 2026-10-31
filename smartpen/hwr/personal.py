@@ -32,6 +32,7 @@ from smartpen.hwr.model import (
     default_model_config,
     encoded_length,
 )
+from smartpen.hwr.sensors import resolve_sensor_profile
 from smartpen.hwr.ts2vec import (
     TS2VecProjectionHead,
     context_crop_bounds,
@@ -71,6 +72,7 @@ def run_onhw_encoder_pretraining(
     num_threads: int = 4,
     mixed_precision: bool | None = None,
     model_config: dict | None = None,
+    sensor_profile: str = "front_acc_gyro6",
 ) -> dict:
     """Train the M5 encoder on OnHW and mark its checkpoint for transfer."""
     return run_training(
@@ -85,6 +87,7 @@ def run_onhw_encoder_pretraining(
         max_validation_samples=max_validation_samples,
         num_threads=num_threads,
         model_type="resnet_bilstm_ctc",
+        sensor_profile=sensor_profile,
         mixed_precision=mixed_precision,
         training_stage="onhw_encoder_pretraining",
         model_config=model_config,
@@ -92,7 +95,10 @@ def run_onhw_encoder_pretraining(
 
 
 def load_pretrained_encoder(
-    model: nn.Module, checkpoint_path: str | Path
+    model: nn.Module,
+    checkpoint_path: str | Path,
+    *,
+    target_sensor_profile_id: str,
 ) -> dict[str, Any]:
     """Copy compatible OnHW CNN/BiLSTM weights without transferring the CTC head."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -100,9 +106,23 @@ def load_pretrained_encoder(
     if model_type != "resnet_bilstm_ctc":
         raise ValueError("M6-A requires an OnHW ResNet-BiLSTM-CTC checkpoint")
     training_report = checkpoint.get("training_report", {})
-    if training_report.get("dataset") != "OnHW-Words500 writer-independent":
+    if (
+        training_report.get("dataset")
+        not in {"OnHW-Words500", "OnHW-Words500 writer-independent"}
+        or training_report.get("protocol", "writer_independent") != "writer_independent"
+    ):
         raise ValueError("pretraining checkpoint is not from OnHW-Words500")
     source_config = checkpoint.get("model_config", {})
+    target_profile = resolve_sensor_profile(target_sensor_profile_id)
+    source_profile_id = checkpoint.get("sensor_profile_id")
+    if source_profile_id is None:
+        source_profile_id = "front_acc_gyro6" if source_config.get("input_channels") == 6 else None
+    if source_profile_id != target_profile.profile_id:
+        raise ValueError(
+            "pretrained input profile is incompatible with the target recordings "
+            f"({source_profile_id!r} vs {target_profile.profile_id!r}); provide an "
+            "explicit input adapter or reinitialize the input stem before transfer"
+        )
     target_config = getattr(model, "_m6_model_config", None)
     if target_config is not None:
         mismatched = [
@@ -139,6 +159,8 @@ def load_pretrained_encoder(
         "source_fold": checkpoint.get("fold"),
         "loaded_encoder_tensors": len(encoder_state),
         "classifier_head_transferred": False,
+        "source_sensor_profile_id": source_profile_id,
+        "target_sensor_profile_id": target_profile.profile_id,
     }
 
 
@@ -261,7 +283,14 @@ def _pad_feature_views(
     values: list[np.ndarray], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
     lengths = torch.tensor([len(value) for value in values], dtype=torch.long)
-    padded = torch.zeros((len(values), int(lengths.max()), 6), dtype=torch.float32)
+    if not values or any(value.ndim != 2 for value in values):
+        raise ValueError("feature views must be non-empty [time, channels] arrays")
+    channel_counts = {value.shape[1] for value in values}
+    if len(channel_counts) != 1 or not next(iter(channel_counts)):
+        raise ValueError("feature views must have the same positive channel count")
+    padded = torch.zeros(
+        (len(values), int(lengths.max()), next(iter(channel_counts))), dtype=torch.float32
+    )
     for index, value in enumerate(values):
         padded[index, : len(value)] = torch.from_numpy(
             np.ascontiguousarray(value, dtype=np.float32)
@@ -547,7 +576,11 @@ def _train_personal_variant(
     if initialization == "onhw_pretrained_encoder":
         if initialization_checkpoint is None:
             raise ValueError("OnHW encoder initialization requires a checkpoint")
-        transfer_metadata = load_pretrained_encoder(model, initialization_checkpoint)
+        transfer_metadata = load_pretrained_encoder(
+            model,
+            initialization_checkpoint,
+            target_sensor_profile_id="front_acc_gyro6",
+        )
     elif initialization == "personal_ts2vec_encoder":
         if initialization_checkpoint is None:
             raise ValueError("personal TS2Vec initialization requires a checkpoint")
@@ -748,7 +781,11 @@ def run_personal_comparison(
     # Validate transfer compatibility before starting either experiment.
     probe_model = build_model("resnet_bilstm_ctc", config)
     probe_model._m6_model_config = config
-    transfer_metadata = load_pretrained_encoder(probe_model, pretrained_path)
+    transfer_metadata = load_pretrained_encoder(
+        probe_model,
+        pretrained_path,
+        target_sensor_profile_id="front_acc_gyro6",
+    )
     del probe_model
 
     results = {}

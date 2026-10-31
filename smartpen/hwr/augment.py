@@ -1,8 +1,9 @@
-"""Reproducible, training-only six-axis IMU augmentations for M6-B."""
+"""Reproducible, training-only measured-sensor augmentations for M6-B."""
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 
@@ -38,13 +39,16 @@ def apply_augmentation(
     rng: np.random.Generator,
     training_std: np.ndarray,
 ) -> SequenceRecord:
-    """Apply one named transform to a raw six-axis record, preserving its label."""
+    """Apply a compatible training-only transform, preserving record metadata."""
     values = np.asarray(record.features, dtype=np.float32).copy()
-    if values.ndim != 2 or values.shape[1] != 6 or len(values) == 0:
-        raise ValueError("augmentation expects a non-empty (timesteps, 6) sequence")
+    if values.ndim != 2 or values.shape[1] < 1 or len(values) == 0:
+        raise ValueError("augmentation expects a non-empty [timesteps, channels] sequence")
+    channels = values.shape[1]
     scale = np.asarray(training_std, dtype=np.float32)
-    if scale.shape != (6,) or not np.isfinite(scale).all() or np.any(scale <= 0):
-        raise ValueError("training_std must contain six positive finite axis scales")
+    if scale.shape != (channels,) or not np.isfinite(scale).all() or np.any(scale <= 0):
+        raise ValueError(
+            f"training_std must contain {channels} positive finite channel scales"
+        )
 
     if name == "temporal_stretch":
         factor = float(rng.uniform(0.9, 1.1))
@@ -53,30 +57,50 @@ def apply_augmentation(
             source_time = np.linspace(0.0, 1.0, len(values), dtype=np.float64)
             target_time = np.linspace(0.0, 1.0, new_length, dtype=np.float64)
             values = np.stack(
-                [np.interp(target_time, source_time, values[:, axis]) for axis in range(6)],
+                [np.interp(target_time, source_time, values[:, axis]) for axis in range(channels)],
                 axis=1,
             ).astype(np.float32)
     elif name == "gaussian_noise":
         values += rng.normal(0.0, 0.01 * scale, size=values.shape).astype(np.float32)
     elif name == "sensor_bias_gain":
-        gains = rng.uniform(0.97, 1.03, size=6).astype(np.float32)
-        offsets = rng.normal(0.0, 0.02 * scale, size=6).astype(np.float32)
+        gains = rng.uniform(0.97, 1.03, size=channels).astype(np.float32)
+        offsets = rng.normal(0.0, 0.02 * scale, size=channels).astype(np.float32)
         values = values * gains + offsets
     elif name == "rotation_3d":
         rotation = _small_rotation(rng)
-        values[:, :3] = values[:, :3] @ rotation.T
-        values[:, 3:] = values[:, 3:] @ rotation.T
+        vector_groups = _vector_channel_groups(record, channels)
+        if not vector_groups:
+            raise ValueError(
+                "rotation_3d requires at least one complete measured xyz sensor group"
+            )
+        for indices in vector_groups:
+            values[:, indices] = values[:, indices] @ rotation.T
     else:
         raise ValueError(f"{name!r} is not a per-record augmentation")
 
-    return SequenceRecord(
+    return replace(
+        record,
         features=np.ascontiguousarray(values, dtype=np.float32),
-        text=record.text,
-        writer_id=record.writer_id,
-        sample_index=record.sample_index,
-        session_id=record.session_id,
-        sample_id=record.sample_id,
+        content_sha256=None,
     )
+
+
+def _vector_channel_groups(record: SequenceRecord, channel_count: int) -> tuple[tuple[int, ...], ...]:
+    """Find complete xyz sensor vectors using semantic names when available."""
+    if not record.channel_names:
+        if channel_count == 6:
+            return (tuple(range(3)), tuple(range(3, 6)))
+        return ()
+    groups = []
+    for prefix in ("acc_front", "acc_rear", "gyro", "mag"):
+        indices = tuple(
+            record.channel_names.index(f"{prefix}_{axis}")
+            for axis in ("x", "y", "z")
+            if f"{prefix}_{axis}" in record.channel_names
+        )
+        if len(indices) == 3:
+            groups.append(indices)
+    return tuple(groups)
 
 
 def _small_rotation(rng: np.random.Generator) -> np.ndarray:
@@ -139,13 +163,14 @@ def concatenate_training_records(
             left_id = left.sample_id or str(left.sample_index)
             right_id = right.sample_id or str(right.sample_index)
             combined.append(
-                SequenceRecord(
+                replace(
+                    left,
                     features=np.ascontiguousarray(features, dtype=np.float32),
                     text=text,
-                    writer_id=left.writer_id,
                     sample_index=next_index,
-                    session_id=left.session_id,
                     sample_id=f"m6b-concat-{left_id}-{right_id}",
+                    source_id=None,
+                    content_sha256=None,
                 )
             )
             next_index += 1

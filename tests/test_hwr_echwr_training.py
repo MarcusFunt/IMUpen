@@ -82,5 +82,11 @@ def test_m6d_runs_fair_session_held_out_comparison_and_saves_encoder_only(tmp_pa
     )
     assert baseline["training_auxiliary_state"] is None
     assert contrastive["training_auxiliary_state"]
+    assert not any(
+        "cls_token" in key for key in contrastive["training_auxiliary_state"]
+    )
     assert set(contrastive["model_state"]) == set(baseline["model_state"])
     assert contrastive["training_stage"] == "personal_echwr_finetuning"
+    assert comparison["models"]["ctc_batch_and_error_contrastive"][
+        "transcript_diversity"
+    ]["unique_training_transcript_count"] >= 1

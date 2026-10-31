@@ -103,6 +103,13 @@ def test_timestamp_mask_is_seeded_and_does_not_mutate_its_input():
     assert np.count_nonzero(np.all(first == 0, axis=1)) > 0
 
 
+def test_timestamp_mask_accepts_any_positive_channel_count():
+    values = np.ones((20, 13), dtype=np.float32)
+    masked = mask_timestamps(values, np.random.default_rng(9))
+    assert masked.shape == (20, 13)
+    assert np.count_nonzero(np.all(masked == 0, axis=1)) > 0
+
+
 def test_m6c_excludes_validation_sessions_and_fine_tunes_both_initializations(tmp_path):
     labeled_root = tmp_path / "labeled"
     unlabeled_root = tmp_path / "unlabeled"

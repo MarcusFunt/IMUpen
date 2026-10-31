@@ -92,7 +92,6 @@ class ECHWRAuxiliaryBranch(nn.Module):
         self.char_embedding = nn.Embedding(
             len(charset) + 2, embedding_dim, padding_idx=0
         )
-        self.cls_token = nn.Parameter(torch.empty(1, 1, embedding_dim))
         self.position_embedding = nn.Embedding(max_text_characters + 2, embedding_dim)
         text_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
@@ -108,7 +107,6 @@ class ECHWRAuxiliaryBranch(nn.Module):
         )
         self.text_norm = nn.LayerNorm(embedding_dim)
         self.logit_scale = nn.Parameter(torch.tensor(math.log(1.0 / 0.07)))
-        nn.init.normal_(self.cls_token, std=0.02)
 
     def encode_sensor(
         self, features: torch.Tensor, lengths: torch.Tensor

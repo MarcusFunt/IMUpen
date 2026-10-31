@@ -63,8 +63,8 @@ def mask_timestamps(
     probability: float = 0.15,
 ) -> np.ndarray:
     """Mask random normalized input timestamps with the training mean (zero)."""
-    if values.ndim != 2 or values.shape[1] != 6 or len(values) == 0:
-        raise ValueError("timestamp masking expects non-empty (timesteps, 6) values")
+    if values.ndim != 2 or values.shape[1] < 1 or len(values) == 0:
+        raise ValueError("timestamp masking expects non-empty (timesteps, channels) values")
     if not 0.0 <= probability < 1.0:
         raise ValueError("mask probability must be in [0, 1)")
     result = np.asarray(values, dtype=np.float32).copy()

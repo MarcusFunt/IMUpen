@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import tempfile
+from collections import Counter
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,7 +76,11 @@ def _train_echwr_variant(
     model._m6_model_config = model_config
     transfer_metadata = None
     if initialization_checkpoint is not None:
-        transfer_metadata = load_pretrained_encoder(model, initialization_checkpoint)
+        transfer_metadata = load_pretrained_encoder(
+            model,
+            initialization_checkpoint,
+            target_sensor_profile_id="front_acc_gyro6",
+        )
     model = model.to(device)
 
     auxiliary = None
@@ -120,6 +125,7 @@ def _train_echwr_variant(
         sample_count = 0
         contrastive_active_batches = 0
         contrastive_skipped_batches = 0
+        distinct_training_transcripts: set[str] = set()
 
         for batch_index, batch in enumerate(train_loader):
             inputs = batch["inputs"].to(device)
@@ -127,6 +133,7 @@ def _train_echwr_variant(
             targets = batch["targets"].to(device)
             target_lengths = batch["target_lengths"].to(device)
             texts = batch["texts"]
+            distinct_training_transcripts.update(texts)
             optimizer.zero_grad(set_to_none=True)
             autocast_context = (
                 torch.autocast(device_type="cuda", dtype=torch.float16)
@@ -229,9 +236,11 @@ def _train_echwr_variant(
                 "validation_samples": len(references),
                 "batch_contrastive_active_batches": contrastive_active_batches,
                 "batch_contrastive_skipped_batches": contrastive_skipped_batches,
+                "distinct_training_transcripts_seen": len(distinct_training_transcripts),
             }
         )
 
+    transcript_counts = Counter(record.text for record in fit_records)
     report = {
         "schema_version": 1,
         "experiment": "M6-D ECHWR-style personal fine-tuning",
@@ -260,6 +269,21 @@ def _train_echwr_variant(
         "num_threads": num_threads,
         "training_sample_ids": sorted(record.sample_id for record in fit_records),
         "validation_sample_ids": sorted(record.sample_id for record in validation_records),
+        "transcript_diversity": {
+            "training_sample_count": len(fit_records),
+            "unique_training_transcript_count": len(transcript_counts),
+            "unique_transcript_ratio": len(transcript_counts) / max(len(fit_records), 1),
+            "duplicate_transcript_group_count": sum(
+                count > 1 for count in transcript_counts.values()
+            ),
+            "samples_with_repeated_transcripts": sum(
+                count for count in transcript_counts.values() if count > 1
+            ),
+            "contrastive_batch_policy": (
+                "batch InfoNCE excludes duplicate transcript rows; batches with fewer "
+                "than two distinct transcripts skip that objective"
+            ),
+        },
         "training_sessions": split_manifest["train_sessions"],
         "validation_sessions": split_manifest["validation_sessions"],
         "session_leakage": False,
@@ -421,7 +445,11 @@ def run_personal_echwr_comparison(
             raise FileNotFoundError(checkpoint_path)
         probe = build_model("resnet_bilstm_ctc", config)
         probe._m6_model_config = config
-        transfer_metadata = load_pretrained_encoder(probe, checkpoint_path)
+        transfer_metadata = load_pretrained_encoder(
+            probe,
+            checkpoint_path,
+            target_sensor_profile_id="front_acc_gyro6",
+        )
         del probe
 
     output = Path(output_dir)
@@ -525,6 +553,7 @@ def run_personal_echwr_comparison(
                 "model_parameters": result["model_parameters"],
                 "auxiliary_training_parameters": result["auxiliary_training_parameters"],
                 "final_metrics": result["final_metrics"],
+                "transcript_diversity": result["transcript_diversity"],
                 "epochs": result["epochs"],
                 "checkpoint": f"{name}/model.pt",
             }
