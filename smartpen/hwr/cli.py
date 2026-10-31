@@ -9,6 +9,13 @@ from smartpen.hwr.data import PERSONAL_CHARSET
 from smartpen.hwr.augment import AUGMENTATION_NAMES
 from smartpen.hwr.echwr_training import run_personal_echwr_comparison
 from smartpen.hwr.model import MODEL_TYPES
+from smartpen.hwr.sensors import SENSOR_PROFILES
+from smartpen.hwr.experiments import (
+    build_adaptation_manifests,
+    run_experiment,
+    run_sweep,
+    run_writer_vocabulary_factorial,
+)
 from smartpen.hwr.personal import (
     run_onhw_encoder_pretraining,
     run_personal_comparison,
@@ -27,6 +34,71 @@ def _parser() -> argparse.ArgumentParser:
         description="Train and evaluate CTC handwriting models on OnHW-Words500."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    experiment = commands.add_parser(
+        "run-experiment",
+        help="run one JSON-configured, resumable official-fold M4 or M5 experiment",
+    )
+    experiment.add_argument("--config", required=True, help="JSON experiment configuration")
+    experiment.add_argument("--output", required=True, help="root directory for run artifacts")
+    experiment.add_argument("--dry-run", action="store_true", help="validate and record the run plan")
+    experiment.add_argument(
+        "--no-resume",
+        action="store_false",
+        dest="resume",
+        default=True,
+        help="discard saved epoch progress by starting a fresh training attempt",
+    )
+
+    sweep = commands.add_parser(
+        "run-sweep",
+        help="run a resumable M4/M5 sensor-profile × fold × seed screening sweep",
+    )
+    sweep.add_argument("--config", required=True, help="JSON sweep configuration")
+    sweep.add_argument("--output", required=True, help="root directory for sweep artifacts")
+    sweep.add_argument("--dry-run", action="store_true", help="validate and record every run plan")
+
+    factorial = commands.add_parser(
+        "run-factorial",
+        help="run matched W × V custom writer/vocabulary exposure cells",
+    )
+    factorial.add_argument("--data", required=True, help="official OnHW ZIP or extracted folder")
+    factorial.add_argument("--output", required=True, help="root directory for run artifacts")
+    factorial.add_argument("--target-writers", nargs="+", required=True)
+    factorial.add_argument("--fold", type=int, default=0, choices=range(5))
+    factorial.add_argument("--query-per-writer", type=int, default=1)
+    factorial.add_argument("--support-per-writer", type=int, default=5)
+    factorial.add_argument("--training-samples-per-cell", type=int)
+    factorial.add_argument(
+        "--strict-balanced",
+        action="store_true",
+        help="fail when mandatory data or pool sizes prevent equal training counts",
+    )
+    factorial.add_argument(
+        "--sensor-profile",
+        choices=[profile.profile_id for profile in SENSOR_PROFILES],
+        default="front_acc_gyro6",
+    )
+    factorial.add_argument("--model-type", choices=MODEL_TYPES, default="resnet_bilstm_ctc")
+    factorial.add_argument("--epochs", type=int, default=10)
+    factorial.add_argument("--batch-size", type=int, default=32)
+    factorial.add_argument("--seed", type=int, default=1337)
+    factorial.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    factorial.add_argument("--num-threads", type=int, default=4)
+
+    adaptation = commands.add_parser(
+        "build-adaptation-manifests",
+        help="write leakage-checked P1–P6 OnHW writer-adaptation split manifests",
+    )
+    adaptation.add_argument("--data", required=True, help="official OnHW ZIP or extracted folder")
+    adaptation.add_argument("--output", required=True, help="directory for split manifests")
+    adaptation.add_argument("--target-writer", required=True)
+    adaptation.add_argument("--fold", type=int, default=0, choices=range(5))
+    adaptation.add_argument("--query-count", type=int, default=10)
+    adaptation.add_argument(
+        "--support-budgets", type=int, nargs="+", default=(1, 5, 10, 25, 50, 100)
+    )
+    adaptation.add_argument("--seed", type=int, default=1337)
 
     train = commands.add_parser("train", help="train and report held-out writer metrics")
     _add_training_arguments(train)
@@ -174,6 +246,12 @@ def _add_training_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-train-samples", type=int)
     parser.add_argument("--max-validation-samples", type=int)
     parser.add_argument(
+        "--sensor-profile",
+        choices=[profile.profile_id for profile in SENSOR_PROFILES],
+        default="front_acc_gyro6",
+        help="select measured OnHW sensor groups; default keeps the legacy six axes",
+    )
+    parser.add_argument(
         "--mixed-precision",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -183,6 +261,56 @@ def _add_training_arguments(parser: argparse.ArgumentParser) -> None:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "run-experiment":
+        report = run_experiment(
+            config_path=args.config,
+            output_dir=args.output,
+            dry_run=args.dry_run,
+            resume=args.resume,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if args.command == "run-sweep":
+        report = run_sweep(
+            config_path=args.config,
+            output_dir=args.output,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if args.command == "run-factorial":
+        report = run_writer_vocabulary_factorial(
+            data_path=args.data,
+            output_dir=args.output,
+            target_writers=args.target_writers,
+            fold=args.fold,
+            query_per_writer=args.query_per_writer,
+            support_per_writer=args.support_per_writer,
+            training_samples_per_cell=args.training_samples_per_cell,
+            allow_unbalanced=not args.strict_balanced,
+            sensor_profile=args.sensor_profile,
+            model_type=args.model_type,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            device_name=args.device,
+            num_threads=args.num_threads,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if args.command == "build-adaptation-manifests":
+        report = build_adaptation_manifests(
+            data_path=args.data,
+            output_dir=args.output,
+            target_writer=args.target_writer,
+            fold=args.fold,
+            query_count=args.query_count,
+            support_budgets=tuple(args.support_budgets),
+            seed=args.seed,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+
     if args.command == "train":
         report = run_training(
             data_path=args.data,
@@ -196,6 +324,7 @@ def main() -> None:
             max_validation_samples=args.max_validation_samples,
             num_threads=args.num_threads,
             model_type=args.model_type,
+            sensor_profile=args.sensor_profile,
             mixed_precision=args.mixed_precision,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -213,6 +342,7 @@ def main() -> None:
             max_train_samples=args.max_train_samples,
             max_validation_samples=args.max_validation_samples,
             num_threads=args.num_threads,
+            sensor_profile=args.sensor_profile,
             mixed_precision=args.mixed_precision,
         )
         print(json.dumps(comparison, ensure_ascii=False, indent=2))
@@ -232,6 +362,7 @@ def main() -> None:
             num_threads=args.num_threads,
             mixed_precision=args.mixed_precision,
             model_type=args.model_type,
+            sensor_profile=args.sensor_profile,
             include_combined=args.include_combined,
             concat_delimiter=args.concat_delimiter,
             concat_gap_frames=args.concat_gap_frames,
@@ -251,6 +382,7 @@ def main() -> None:
             max_train_samples=args.max_train_samples,
             max_validation_samples=args.max_validation_samples,
             num_threads=args.num_threads,
+            sensor_profile=args.sensor_profile,
             mixed_precision=args.mixed_precision,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))

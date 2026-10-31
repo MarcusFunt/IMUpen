@@ -7,6 +7,7 @@ import os
 import platform
 import random
 import tempfile
+import time
 from contextlib import nullcontext
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -29,10 +30,20 @@ from smartpen.hwr.data import (
     ONHW_CHARSET,
     OnHWFold,
     SequenceRecord,
+    apply_sensor_profile,
     encode_text,
     load_onhw_words500,
 )
-from smartpen.hwr.metrics import corpus_error_rates
+from smartpen.hwr.sensors import (
+    ONHW_SAMPLE_RATE_HZ,
+    PRIMARY_SENSOR_COMPARISONS,
+    resolve_sensor_profile,
+)
+from smartpen.hwr.metrics import (
+    corpus_error_rates,
+    paired_writer_bootstrap,
+    per_writer_error_rates,
+)
 from smartpen.hwr.model import (
     MODEL_TYPES,
     build_model,
@@ -41,6 +52,7 @@ from smartpen.hwr.model import (
     default_model_config,
     encoded_length,
 )
+from smartpen.hwr.provenance import code_provenance
 
 
 def seed_everything(seed: int, device_type: str = "cpu") -> None:
@@ -80,6 +92,66 @@ def keep_ctc_feasible(
     return kept, len(records) - len(kept)
 
 
+def _official_split_summary(fold_data: OnHWFold) -> dict:
+    if fold_data.split_family not in {"writer_dependent", "writer_independent"}:
+        return {
+            "official_protocol": None,
+            "custom_protocol": fold_data.split_family,
+            "interpretation": "custom split; not an official Words500 benchmark",
+        }
+    train_vocab = {record.text for record in fold_data.train}
+    validation_vocab = {record.text for record in fold_data.validation}
+    summary = {
+        "official_protocol": fold_data.split_family,
+        "train_writer_count": len(fold_data.train_writers),
+        "validation_writer_count": len(fold_data.validation_writers),
+        "writer_overlap_count": len(fold_data.train_writers & fold_data.validation_writers),
+        "train_vocabulary_size": len(train_vocab),
+        "validation_vocabulary_size": len(validation_vocab),
+        "shared_vocabulary_size": len(train_vocab & validation_vocab),
+    }
+    if fold_data.split_family == "writer_dependent":
+        train_counts = {
+            writer: len({record.text for record in fold_data.train if record.writer_id == writer})
+            for writer in fold_data.train_writers
+        }
+        validation_counts = {
+            writer: len({record.text for record in fold_data.validation if record.writer_id == writer})
+            for writer in fold_data.validation_writers
+        }
+        summary.update(
+            {
+                "interpretation": "familiar writers, held-out word identities",
+                "published_word_count_target_per_writer": {"train": 400, "validation": 100},
+                "observed_distinct_words_per_writer": {
+                    "train_min": min(train_counts.values(), default=0),
+                    "train_max": max(train_counts.values(), default=0),
+                    "validation_min": min(validation_counts.values(), default=0),
+                    "validation_max": max(validation_counts.values(), default=0),
+                },
+                "matches_published_word_counts": bool(train_counts)
+                and all(value == 400 for value in train_counts.values())
+                and all(value == 100 for value in validation_counts.values()),
+            }
+        )
+    else:
+        summary.update(
+            {
+                "interpretation": "unseen writers, familiar word identities",
+                "writers_are_disjoint": fold_data.train_writers.isdisjoint(
+                    fold_data.validation_writers
+                ),
+                "vocabulary_is_shared": bool(train_vocab & validation_vocab),
+                "note": (
+                    "Official WI is a writer-held-out/common-vocabulary task. This report "
+                    "measures actual vocabulary overlap instead of treating WI versus WD "
+                    "as a causal writer-familiarity contrast."
+                ),
+            }
+        )
+    return summary
+
+
 def select_records(
     records: Sequence[SequenceRecord], limit: int | None, seed: int
 ) -> tuple[list[SequenceRecord], list[int]]:
@@ -99,13 +171,21 @@ def feature_normalization(records: Sequence[SequenceRecord]) -> tuple[np.ndarray
     """Estimate per-axis mean/std from fitting samples only."""
     if not records:
         raise ValueError("cannot normalize an empty training partition")
-    sums = np.zeros(6, dtype=np.float64)
-    sum_squares = np.zeros(6, dtype=np.float64)
+    first = np.asarray(records[0].features)
+    if first.ndim != 2 or first.shape[1] < 1 or len(first) == 0:
+        raise ValueError("each training sequence must be a non-empty [time, channels] array")
+    channel_count = first.shape[1]
+    sums = np.zeros(channel_count, dtype=np.float64)
+    sum_squares = np.zeros(channel_count, dtype=np.float64)
     count = 0
     for record in records:
         values = np.asarray(record.features, dtype=np.float64)
-        if values.ndim != 2 or values.shape[1] != 6 or len(values) == 0:
-            raise ValueError("each training sequence must have shape (timesteps, 6)")
+        if values.ndim != 2 or values.shape[1] != channel_count or len(values) == 0:
+            raise ValueError(
+                f"each training sequence must have shape (timesteps, {channel_count})"
+            )
+        if not np.isfinite(values).all():
+            raise ValueError("normalization input contains non-finite sensor values")
         sums += values.sum(axis=0)
         sum_squares += np.square(values).sum(axis=0)
         count += len(values)
@@ -189,7 +269,10 @@ def _collate_records(mean: np.ndarray, std: np.ndarray, charset: str = ONHW_CHAR
     def collate(records: list[SequenceRecord]) -> dict[str, torch.Tensor | list]:
         lengths = torch.tensor([len(record.features) for record in records], dtype=torch.long)
         max_length = int(lengths.max())
-        inputs = torch.zeros((len(records), max_length, 6), dtype=torch.float32)
+        channels = len(mean)
+        if len(std) != channels:
+            raise ValueError("normalization mean and standard deviation dimensions differ")
+        inputs = torch.zeros((len(records), max_length, channels), dtype=torch.float32)
         token_sequences = [encode_text(record.text, charset) for record in records]
         targets = torch.tensor(
             [token for sequence in token_sequences for token in sequence], dtype=torch.long
@@ -209,6 +292,10 @@ def _collate_records(mean: np.ndarray, std: np.ndarray, charset: str = ONHW_CHAR
             "target_lengths": target_lengths,
             "texts": [record.text for record in records],
             "writer_ids": [record.writer_id for record in records],
+            "sample_ids": [
+                record.sample_id or record.source_id or str(record.sample_index)
+                for record in records
+            ],
         }
 
     return collate
@@ -251,13 +338,18 @@ def _run_epoch(
     scaler: torch.amp.GradScaler | None = None,
     charset: str = ONHW_CHARSET,
     blank_index: int = ONHW_BLANK_INDEX,
-) -> tuple[float, list[str], list[str]]:
+    include_metadata: bool = False,
+) -> tuple[float, list[str], list[str]] | tuple[
+    float, list[str], list[str], list[int | str], list[str]
+]:
     is_training = optimizer is not None
     model.train(is_training)
     total_loss = 0.0
     sample_count = 0
     predictions: list[str] = []
     references: list[str] = []
+    writer_ids: list[int | str] = []
+    sample_ids: list[str] = []
     with torch.set_grad_enabled(is_training):
         for batch in loader:
             inputs = batch["inputs"].to(device)
@@ -306,10 +398,26 @@ def _run_epoch(
                     )
                 )
                 references.append(reference)
-    return total_loss / max(sample_count, 1), predictions, references
+                if include_metadata:
+                    writer_ids.append(batch["writer_ids"][index])
+                    sample_ids.append(batch["sample_ids"][index])
+    result = total_loss / max(sample_count, 1), predictions, references
+    if include_metadata:
+        return (*result, writer_ids, sample_ids)
+    return result
 
 
 def _sha256(path: Path) -> str | None:
+    if path.is_dir():
+        digest = hashlib.sha256()
+        files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+        for candidate in files:
+            digest.update(candidate.relative_to(path).as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            with candidate.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
     if not path.is_file():
         return None
     digest = hashlib.sha256()
@@ -334,6 +442,23 @@ def _atomic_json(path: Path, value: dict) -> None:
             os.unlink(temp_name)
 
 
+def _atomic_torch_save(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".tmp-model-", suffix=".pt", dir=path.parent)
+    os.close(fd)
+    try:
+        torch.save(value, temp_name)
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def _synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def run_training(
     *,
     data_path: str | Path,
@@ -347,14 +472,18 @@ def run_training(
     max_validation_samples: int | None = None,
     num_threads: int = 4,
     model_type: str = "cnn_bilstm_ctc",
+    sensor_profile: str = "front_acc_gyro6",
     mixed_precision: bool | None = None,
     training_stage: str = "supervised",
     model_config: dict | None = None,
     augmentation: str = "none",
     concat_delimiter: str = "",
     concat_gap_frames: int = 8,
+    resume: bool = False,
+    records_override: OnHWFold | None = None,
+    custom_split_manifest: dict | None = None,
 ) -> dict:
-    """Train and evaluate a CTC model on an official OnHW writer-independent fold."""
+    """Train on one official OnHW fold using a declared measured sensor profile."""
     if epochs < 1 or batch_size < 1 or num_threads < 1:
         raise ValueError("epochs, batch_size, and num_threads must be positive")
     if device_name == "auto":
@@ -372,14 +501,68 @@ def run_training(
     seed_everything(seed, device.type)
     torch.set_num_threads(num_threads)
 
-    fold_data: OnHWFold = load_onhw_words500(data_path, fold=fold)
+    profile = resolve_sensor_profile(sensor_profile)
+    if "rotation_3d" in transforms and not any(
+        group.code in profile.group_code for group in profile.groups
+        if group.code in {"F", "R", "G", "M"}
+    ):
+        raise ValueError(
+            f"rotation_3d is incompatible with sensor profile {profile.profile_id}"
+        )
+    fold_data: OnHWFold = records_override or load_onhw_words500(data_path, fold=fold)
     train_writers = fold_data.train_writers
     validation_writers = fold_data.validation_writers
-    if not train_writers.isdisjoint(validation_writers):
-        raise ValueError("writer leakage between official train and validation partitions")
+    writer_overlap = not train_writers.isdisjoint(validation_writers)
+    if fold_data.split_family == "writer_independent" and writer_overlap:
+        raise ValueError("writer leakage between official writer-independent partitions")
+    if fold_data.split_family == "writer_dependent" and not writer_overlap:
+        raise ValueError("official writer-dependent partitions must share writers")
+    if custom_split_manifest is not None:
+        if max_train_samples is not None:
+            raise ValueError(
+                "sample-capped custom training could drop required exposure anchors; "
+                "set the matched budget when building the factorial split instead"
+            )
+        if custom_split_manifest.get("protocol") != "custom_writer_vocabulary_factorial":
+            raise ValueError("unsupported custom split manifest protocol")
+        expected_writer_exposure = bool(custom_split_manifest.get("writer_exposure"))
+        expected_vocabulary_exposure = bool(custom_split_manifest.get("vocabulary_exposure"))
+        actual_vocabulary_exposure = bool(
+            {record.text for record in fold_data.train}
+            & {record.text for record in fold_data.validation}
+        )
+        if writer_overlap != expected_writer_exposure:
+            raise ValueError("custom split writer exposure does not match its manifest")
+        if actual_vocabulary_exposure != expected_vocabulary_exposure:
+            raise ValueError("custom split vocabulary exposure does not match its manifest")
+        train_fingerprints = {record.content_sha256 for record in fold_data.train}
+        query_fingerprints = {record.content_sha256 for record in fold_data.validation}
+        train_fingerprints.discard(None)
+        query_fingerprints.discard(None)
+        if train_fingerprints & query_fingerprints:
+            raise ValueError("custom split reuses a fingerprinted recording across train/query")
 
-    feasible_train, dropped_train_ctc = keep_ctc_feasible(fold_data.train)
-    feasible_validation, dropped_validation_ctc = keep_ctc_feasible(fold_data.validation)
+    profiled_train = apply_sensor_profile(fold_data.train, profile.profile_id)
+    profiled_validation = apply_sensor_profile(fold_data.validation, profile.profile_id)
+    for partition, records in (("train", profiled_train), ("validation", profiled_validation)):
+        for record in records:
+            values = np.asarray(record.features)
+            if (
+                values.ndim != 2
+                or values.shape[1] != profile.input_channels
+                or len(values) == 0
+            ):
+                raise ValueError(
+                    f"{partition} sample {record.sample_id or record.sample_index} does not "
+                    f"match sensor profile {profile.profile_id}"
+                )
+            if not np.isfinite(values).all():
+                raise ValueError(
+                    f"{partition} sample {record.sample_id or record.sample_index} "
+                    "contains non-finite sensor values"
+                )
+    feasible_train, dropped_train_ctc = keep_ctc_feasible(profiled_train)
+    feasible_validation, dropped_validation_ctc = keep_ctc_feasible(profiled_validation)
     train_records, train_indices = select_records(feasible_train, max_train_samples, seed)
     validation_records, validation_indices = select_records(
         feasible_validation, max_validation_samples, seed + 1
@@ -405,9 +588,16 @@ def run_training(
     )
     augmented_train_records = train_records + concatenated_records
 
-    config = default_model_config(model_type, ONHW_BLANK_INDEX + 1)
+    config = default_model_config(
+        model_type, ONHW_BLANK_INDEX + 1, input_channels=profile.input_channels
+    )
     if model_config:
         config.update(model_config)
+    if int(config.get("input_channels", -1)) != profile.input_channels:
+        raise ValueError(
+            "model input_channels does not match the selected sensor profile "
+            f"({profile.profile_id}: {profile.input_channels})"
+        )
     model = build_model(model_type, config).to(device)
     parameter_count = count_parameters(model)
     use_mixed_precision = (
@@ -433,8 +623,81 @@ def run_training(
         validation_records, batch_size, seed + 1, mean, std
     )
 
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    progress_path = output / "progress.pt"
+    data_hash = _sha256(Path(data_path))
+    resume_signature = {
+        "archive_sha256": data_hash,
+        "fold": fold,
+        "seed": seed,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "num_threads": num_threads,
+        "device_type": device.type,
+        "device_name": (
+            torch.cuda.get_device_name(device) if device.type == "cuda" else None
+        ),
+        "python_version": platform.python_version(),
+        "torch_version": str(torch.__version__),
+        "numpy_version": np.__version__,
+        "mixed_precision": use_mixed_precision,
+        "model_type": model_type,
+        "model_config": config,
+        "sensor_profile": profile.profile_id,
+        "train_sample_ids": [record.sample_id or record.source_id for record in train_records],
+        "validation_sample_ids": [record.sample_id or record.source_id for record in validation_records],
+        "augmentation": augmentation,
+        "concat_delimiter": concat_delimiter if add_concatenations else None,
+        "concat_gap_frames": concat_gap_frames if add_concatenations else None,
+        "custom_split_manifest": custom_split_manifest,
+        "code_provenance": code_provenance(),
+    }
+    resume_signature_sha256 = hashlib.sha256(
+        json.dumps(resume_signature, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     epoch_results: list[dict] = []
-    for epoch in range(epochs):
+    best_model_state: dict[str, torch.Tensor] | None = None
+    best_epoch = 0
+    best_validation_wer = float("inf")
+    best_validation_loss = float("inf")
+    best_predictions: list[str] = []
+    best_references: list[str] = []
+    best_writer_ids: list[int | str] = []
+    best_sample_ids: list[str] = []
+    start_epoch = 0
+    if not resume and progress_path.exists():
+        progress_path.unlink()
+    if resume and progress_path.is_file():
+        progress = torch.load(progress_path, map_location="cpu", weights_only=True)
+        if progress.get("resume_signature_sha256") != resume_signature_sha256:
+            raise ValueError(
+                "saved training progress does not match this dataset, split, model, "
+                "or training configuration"
+            )
+        model.load_state_dict(progress["model_state"])
+        optimizer.load_state_dict(progress["optimizer_state"])
+        scaler.load_state_dict(progress["scaler_state"])
+        epoch_results = progress["epoch_results"]
+        best_model_state = progress["best_model_state"]
+        best_epoch = int(progress["best_epoch"])
+        best_validation_wer = float(progress["best_validation_wer"])
+        best_validation_loss = float(progress["best_validation_loss"])
+        best_predictions = progress["best_predictions"]
+        best_references = progress["best_references"]
+        best_writer_ids = progress["best_writer_ids"]
+        best_sample_ids = progress["best_sample_ids"]
+        start_epoch = int(progress["completed_epochs"])
+        torch.set_rng_state(progress["torch_rng_state"])
+        if device.type == "cuda" and progress.get("cuda_rng_states") is not None:
+            torch.cuda.set_rng_state_all(progress["cuda_rng_states"])
+        if start_epoch > epochs:
+            raise ValueError("saved progress completed more epochs than requested")
+
+    _synchronize_device(device)
+    training_started = time.perf_counter()
+    for epoch in range(start_epoch, epochs):
+        epoch_started = time.perf_counter()
         train_sampler.set_epoch(epoch)
         train_loader.dataset.set_epoch(epoch)
         train_loss, _, _ = _run_epoch(
@@ -446,14 +709,20 @@ def run_training(
             mixed_precision=use_mixed_precision,
             scaler=scaler,
         )
-        validation_loss, hypotheses, references = _run_epoch(
+        _synchronize_device(device)
+        validation_started = time.perf_counter()
+        validation_loss, hypotheses, references, writer_ids, sample_ids = _run_epoch(
             model,
             validation_loader,
             loss_function,
             device,
             mixed_precision=use_mixed_precision,
+            include_metadata=True,
         )
         metrics = corpus_error_rates(hypotheses, references)
+        _synchronize_device(device)
+        validation_seconds = time.perf_counter() - validation_started
+        epoch_seconds = time.perf_counter() - epoch_started
         epoch_results.append(
             {
                 "epoch": epoch + 1,
@@ -465,18 +734,82 @@ def run_training(
                 "reference_characters": metrics["reference_characters"],
                 "word_errors": metrics["word_errors"],
                 "reference_words": metrics["reference_words"],
+                "exact_word_accuracy": metrics["exact_word_accuracy"],
+                "exact_word_count": metrics["exact_word_count"],
                 "validation_samples": len(references),
+                "epoch_seconds": epoch_seconds,
+                "validation_seconds": validation_seconds,
+                "validation_samples_per_second": len(references) / max(validation_seconds, 1e-12),
             }
         )
+
+        if (metrics["wer"], validation_loss) < (
+            best_validation_wer,
+            best_validation_loss,
+        ):
+            best_validation_wer = float(metrics["wer"])
+            best_validation_loss = float(validation_loss)
+            best_epoch = epoch + 1
+            best_predictions = list(hypotheses)
+            best_references = list(references)
+            best_writer_ids = list(writer_ids)
+            best_sample_ids = list(sample_ids)
+            best_model_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
+        if best_model_state is None:
+            raise RuntimeError("training did not produce a selectable checkpoint")
+        progress_value = {
+            "resume_signature_sha256": resume_signature_sha256,
+            "completed_epochs": epoch + 1,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scaler_state": scaler.state_dict(),
+            "epoch_results": epoch_results,
+            "best_model_state": best_model_state,
+            "best_epoch": best_epoch,
+            "best_validation_wer": best_validation_wer,
+            "best_validation_loss": best_validation_loss,
+            "best_predictions": best_predictions,
+            "best_references": best_references,
+            "best_writer_ids": best_writer_ids,
+            "best_sample_ids": best_sample_ids,
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_states": torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
+        }
+        _atomic_torch_save(progress_path, progress_value)
+
+    _synchronize_device(device)
+    training_seconds_this_attempt = time.perf_counter() - training_started
+    if best_model_state is None:
+        raise RuntimeError("no completed epoch is available for checkpoint selection")
+    model.load_state_dict(best_model_state)
 
     report = {
         "schema_version": 1,
         "run_kind": "sample" if max_train_samples or max_validation_samples else "full",
-        "dataset": "OnHW-Words500 writer-independent",
+        "dataset": "OnHW-Words500",
+        "protocol": fold_data.split_family,
         "source_archive": Path(data_path).name,
         "archive_sha256": _sha256(Path(data_path)),
         "fold": fold,
-        "split": "official train/validation split; writer IDs are disjoint",
+        "split": (
+            "custom writer/vocabulary factorial cell; query recordings are fixed across cells"
+            if custom_split_manifest is not None
+            else (
+                "official writer-independent split; writers are disjoint and vocabulary is shared"
+                if fold_data.split_family == "writer_independent"
+                else "official writer-dependent split; writers overlap and word identities are held out"
+            )
+        ),
+        "writer_overlap": writer_overlap,
+        "official_split_summary": _official_split_summary(fold_data),
+        "custom_split_manifest": custom_split_manifest,
+        "analysis_registration": {
+            "primary_sensor_comparisons": list(PRIMARY_SENSOR_COMPARISONS),
+            "full_31_profile_ranking": "exploratory_until_independent_confirmation",
+        },
         "train_samples_in_archive": len(fold_data.train) + fold_data.dropped_train,
         "validation_samples_in_archive": (
             len(fold_data.validation) + fold_data.dropped_validation
@@ -496,7 +829,31 @@ def run_training(
         "validation_writers_sampled": len(
             {record.writer_id for record in validation_records}
         ),
-        "writer_leakage": False,
+        "writer_leakage": fold_data.split_family == "writer_independent" and writer_overlap,
+        "sensor_profile": {
+            "profile_id": profile.profile_id,
+            "group_code": profile.group_code,
+            "channel_indices": list(profile.channel_indices),
+            "channel_names": list(profile.channel_names),
+            "units": list(profile.units),
+            "sample_rate_hz": ONHW_SAMPLE_RATE_HZ,
+            "physical_description": profile.physical_description,
+            "preprocessing": dict(profile.preprocessing),
+            "dataset_compatibility": profile.dataset_compatibility,
+        },
+        "identity_policy": {
+            "stable_source_ids_available": False,
+            "source_id": "null when the archive has no authoritative recording identifier",
+            "sample_id": (
+                "dataset/archive + split family + fold + partition + split-local index; "
+                "unique only within that published partition identity"
+            ),
+            "content_fingerprint": "SHA-256 of canonical float32 little-endian [time, 13] data",
+            "cross_fold_limit": (
+                "exact fingerprint matches can identify unchanged recordings; transformed "
+                "signals cannot be reliably reconstructed as the same source recording"
+            ),
+        },
         "empty_recordings_dropped": {
             "train": fold_data.dropped_train,
             "validation": fold_data.dropped_validation,
@@ -508,6 +865,18 @@ def run_training(
         "sample_indices": {
             "train": train_indices,
             "validation": validation_indices,
+        },
+        "source_ids": {
+            "train": [record.source_id for record in train_records],
+            "validation": [record.source_id for record in validation_records],
+        },
+        "sample_ids": {
+            "train": [record.sample_id for record in train_records],
+            "validation": [record.sample_id for record in validation_records],
+        },
+        "content_fingerprints": {
+            "train": [record.content_sha256 for record in train_records],
+            "validation": [record.content_sha256 for record in validation_records],
         },
         "seed": seed,
         "num_threads": num_threads,
@@ -551,16 +920,44 @@ def run_training(
         "optimizer": "AdamW(lr=0.001, weight_decay=0.0001)",
         "ctc": {"blank_index": ONHW_BLANK_INDEX, "zero_infinity": True},
         "epochs": epoch_results,
-        "final_metrics": {
-            "cer": epoch_results[-1]["validation_cer"],
-            "wer": epoch_results[-1]["validation_wer"],
+        "final_metrics": corpus_error_rates(best_predictions, best_references),
+        "macro_writer_metrics": {
+            "wer": float(np.mean([
+                result["wer"]
+                for result in per_writer_error_rates(
+                    best_predictions, best_references, best_writer_ids
+                ).values()
+            ])),
+            "cer": float(np.mean([
+                result["cer"]
+                for result in per_writer_error_rates(
+                    best_predictions, best_references, best_writer_ids
+                ).values()
+            ])),
         },
+        "per_writer_metrics": per_writer_error_rates(
+            best_predictions, best_references, best_writer_ids
+        ),
+        "validation_outputs": {
+            "sample_ids": best_sample_ids,
+            "writer_ids": best_writer_ids,
+            "hypotheses": best_predictions,
+            "references": best_references,
+        },
+        "checkpoint_selection": {
+            "criterion": "minimum validation WER, then validation loss",
+            "selected_epoch": best_epoch,
+            "selected_validation_loss": best_validation_loss,
+        },
+        "resumed_from_epoch": start_epoch,
+        "training_seconds_this_attempt": training_seconds_this_attempt,
+        "training_signature_sha256": resume_signature_sha256,
+        "code_provenance": code_provenance(),
         "measured_at_utc": datetime.now(timezone.utc).isoformat(),
         "interpretation": (
-            "Measured on this run's sampled held-out writers; not a full-fold "
-            "benchmark and not directly comparable to published results."
+            "Sample-capped integration smoke test only; not an accuracy or full-fold benchmark."
             if report_is_sample(max_train_samples, max_validation_samples)
-            else "Measured on the full official fold; no cross-fold average is implied."
+            else "Measured on this official fold only; no cross-fold average is implied."
         ),
     }
 
@@ -578,19 +975,22 @@ def run_training(
         "blank_index": ONHW_BLANK_INDEX,
         "seed": seed,
         "fold": fold,
+        "sensor_profile_id": profile.profile_id,
+        "sensor_channel_indices": list(profile.channel_indices),
+        "sensor_channel_names": list(profile.channel_names),
+        "sensor_channel_units": list(profile.units),
+        "sample_rate_hz": ONHW_SAMPLE_RATE_HZ,
+        "sensor_profile": report["sensor_profile"],
         "training_report": report,
+        "training_signature_sha256": resume_signature_sha256,
+        "selected_epoch": best_epoch,
     }
     checkpoint_path = output / "model.pt"
-    fd, temporary = tempfile.mkstemp(prefix="tmp-model-", suffix=".pt", dir=output)
-    os.close(fd)
-    try:
-        torch.save(checkpoint, temporary)
-        os.replace(temporary, checkpoint_path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    _atomic_torch_save(checkpoint_path, checkpoint)
     report["checkpoint"] = checkpoint_path.name
     _atomic_json(output / "metrics.json", report)
+    if progress_path.exists():
+        progress_path.unlink()
     return report
 
 
@@ -627,32 +1027,74 @@ def evaluate_checkpoint(
     seed_everything(selected_seed, device.type)
     torch.set_num_threads(num_threads)
     fold_data = load_onhw_words500(data_path, selected_fold)
-    records, dropped_ctc = keep_ctc_feasible(fold_data.validation)
+    profile = resolve_sensor_profile(
+        checkpoint.get("sensor_profile_id", "front_acc_gyro6")
+    )
+    profiled_validation = apply_sensor_profile(fold_data.validation, profile.profile_id)
+    records, dropped_ctc = keep_ctc_feasible(profiled_validation)
     records, indices = select_records(records, max_validation_samples, selected_seed + 1)
     model_type = checkpoint.get("model_type", "cnn_bilstm_ctc")
     model = build_model(model_type, checkpoint["model_config"]).to(device)
+    if int(checkpoint["model_config"].get("input_channels", -1)) != profile.input_channels:
+        raise ValueError("checkpoint model input dimensions do not match its sensor profile")
     model.load_state_dict(checkpoint["model_state"])
     mean = checkpoint["normalization_mean"].numpy().astype(np.float32)
     std = checkpoint["normalization_std"].numpy().astype(np.float32)
     loader, _ = _loader(records, batch_size, selected_seed + 1, mean, std)
     loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
-    loss, hypotheses, references = _run_epoch(
-        model, loader, loss_function, device, mixed_precision=use_mixed_precision
+    _synchronize_device(device)
+    inference_started = time.perf_counter()
+    loss, hypotheses, references, writer_ids, sample_ids = _run_epoch(
+        model,
+        loader,
+        loss_function,
+        device,
+        mixed_precision=use_mixed_precision,
+        include_metadata=True,
     )
+    _synchronize_device(device)
+    inference_seconds = time.perf_counter() - inference_started
     result = {
-        "dataset": "OnHW-Words500 writer-independent",
+        "dataset": "OnHW-Words500",
+        "protocol": fold_data.split_family,
+        "official_split_summary": _official_split_summary(fold_data),
+        "sensor_profile_id": profile.profile_id,
         "model_type": model_type,
         "model_parameters": count_parameters(model),
         "fold": selected_fold,
         "validation_samples": len(records),
         "validation_writers": len({record.writer_id for record in records}),
-        "writer_leakage": not fold_data.train_writers.isdisjoint(
+        "writer_overlap": not fold_data.train_writers.isdisjoint(
             fold_data.validation_writers
+        ),
+        "writer_leakage": (
+            fold_data.split_family == "writer_independent"
+            and not fold_data.train_writers.isdisjoint(fold_data.validation_writers)
         ),
         "ctc_infeasible_recordings_dropped": dropped_ctc,
         "sample_indices": indices,
         "validation_loss": loss,
+        "inference_seconds": inference_seconds,
+        "inference_samples_per_second": len(records) / max(inference_seconds, 1e-12),
         "metrics": corpus_error_rates(hypotheses, references),
+        "macro_writer_metrics": {
+            metric: float(np.mean([
+                writer_metrics[metric]
+                for writer_metrics in per_writer_error_rates(
+                    hypotheses, references, writer_ids
+                ).values()
+            ]))
+            for metric in ("wer", "cer")
+        },
+        "per_writer_metrics": per_writer_error_rates(
+            hypotheses, references, writer_ids
+        ),
+        "validation_outputs": {
+            "sample_ids": sample_ids,
+            "writer_ids": writer_ids,
+            "hypotheses": hypotheses,
+            "references": references,
+        },
         "seed": selected_seed,
         "device": str(device),
         "mixed_precision": use_mixed_precision,
@@ -673,6 +1115,7 @@ def run_comparison(
     max_validation_samples: int | None = None,
     num_threads: int = 4,
     mixed_precision: bool | None = None,
+    sensor_profile: str = "front_acc_gyro6",
 ) -> dict:
     """Train M4 and M5 sequentially on identical samples and write a comparison."""
     output = Path(output_dir)
@@ -690,6 +1133,7 @@ def run_comparison(
             max_validation_samples=max_validation_samples,
             num_threads=num_threads,
             model_type=model_type,
+            sensor_profile=sensor_profile,
             mixed_precision=mixed_precision,
         )
 
@@ -701,6 +1145,7 @@ def run_comparison(
         and baseline["fold"] == resnet["fold"]
         and baseline["seed"] == resnet["seed"]
         and baseline["normalization"] == resnet["normalization"]
+        and baseline["sensor_profile"] == resnet["sensor_profile"]
     )
     if not same_split:
         raise RuntimeError("M4/M5 comparison did not use identical data and split settings")
@@ -716,10 +1161,27 @@ def run_comparison(
     if baseline["writer_leakage"] or resnet["writer_leakage"]:
         raise RuntimeError("M4/M5 comparison includes writer leakage")
 
+    paired_analysis = None
+    if all("validation_outputs" in report for report in runs.values()):
+        first_outputs = baseline["validation_outputs"]
+        second_outputs = resnet["validation_outputs"]
+        for field in ("sample_ids", "writer_ids", "references"):
+            if first_outputs[field] != second_outputs[field]:
+                raise RuntimeError(f"M4/M5 paired validation {field} are not aligned")
+        paired_analysis = paired_writer_bootstrap(
+            first_outputs["hypotheses"],
+            second_outputs["hypotheses"],
+            first_outputs["references"],
+            first_outputs["writer_ids"],
+            seed=seed,
+        )
+
     comparison = {
         "schema_version": 1,
         "run_kind": baseline["run_kind"],
         "dataset": baseline["dataset"],
+        "protocol": baseline["protocol"],
+        "sensor_profile": baseline["sensor_profile"],
         "archive_sha256": baseline["archive_sha256"],
         "fold": fold,
         "seed": seed,
@@ -746,19 +1208,24 @@ def run_comparison(
             "same_seed_batch_size_epochs_and_device": True,
             "writer_leakage": False,
         },
+        "paired_writer_analysis": paired_analysis,
         "models": {
             model_type: {
                 "parameters": report["model_parameters"],
                 "cuda_peak_memory_bytes": report["cuda_peak_memory_bytes"],
                 "configuration": report["model"],
                 "final_metrics": report["final_metrics"],
+                "macro_writer_metrics": report.get("macro_writer_metrics"),
+                "per_writer_metrics": report.get("per_writer_metrics"),
                 "final_metric_counts": {
-                    key: report["epochs"][-1][key]
+                    key: report["final_metrics"].get(key)
                     for key in (
                         "character_errors",
                         "reference_characters",
                         "word_errors",
                         "reference_words",
+                        "exact_word_count",
+                        "sample_count",
                     )
                 },
                 "epoch_metrics": report["epochs"],
@@ -767,8 +1234,8 @@ def run_comparison(
             for model_type, report in runs.items()
         },
         "interpretation": (
-            "Sample-capped experiment; use as an implementation comparison only. "
-            "It is not a full-fold benchmark or a claim of improved handwriting accuracy."
+            "Sample-capped integration smoke test only; not an accuracy benchmark or a "
+            "claim of improved handwriting accuracy."
             if report_is_sample(max_train_samples, max_validation_samples)
             else "Measured on this full official fold only; no cross-fold average is implied."
         ),
@@ -795,6 +1262,7 @@ def run_augmentation_ablation(
     include_combined: bool = False,
     concat_delimiter: str = "",
     concat_gap_frames: int = 8,
+    sensor_profile: str = "front_acc_gyro6",
 ) -> dict:
     """Run M6-B baseline and isolated augmentation experiments on one split."""
     output = Path(output_dir)
@@ -815,6 +1283,7 @@ def run_augmentation_ablation(
             max_validation_samples=max_validation_samples,
             num_threads=num_threads,
             model_type=model_type,
+            sensor_profile=sensor_profile,
             mixed_precision=mixed_precision,
             training_stage="m6b_augmentation_ablation",
             augmentation=variant,
@@ -829,6 +1298,7 @@ def run_augmentation_ablation(
         "seed",
         "sample_indices",
         "normalization",
+        "sensor_profile",
         "model_type",
         "model",
         "batch_size",

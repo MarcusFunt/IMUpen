@@ -18,7 +18,7 @@ def encoded_length(lengths: int | Sequence[int] | torch.Tensor):
 
 
 class CNNBiLSTMCTC(nn.Module):
-    """Map a variable-length (batch, time, six axes) sequence to CTC logits."""
+    """Map a variable-length multichannel sequence to CTC logits."""
 
     def __init__(
         self,
@@ -33,8 +33,11 @@ class CNNBiLSTMCTC(nn.Module):
         super().__init__()
         if num_classes < 2:
             raise ValueError("num_classes must include at least one label and CTC blank")
+        if input_channels < 1:
+            raise ValueError("input_channels must be positive")
+        self.input_channels = int(input_channels)
         self.conv1 = nn.Conv1d(
-            input_channels, conv_channels, kernel_size=5, stride=2, padding=2
+            self.input_channels, conv_channels, kernel_size=5, stride=2, padding=2
         )
         self.conv2 = nn.Conv1d(
             conv_channels, conv_channels * 2, kernel_size=5, stride=2, padding=2
@@ -53,8 +56,10 @@ class CNNBiLSTMCTC(nn.Module):
     def forward(
         self, inputs: torch.Tensor, lengths: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if inputs.ndim != 3 or inputs.shape[-1] != 6:
-            raise ValueError("inputs must have shape (batch, time, 6)")
+        if inputs.ndim != 3 or inputs.shape[-1] != self.input_channels:
+            raise ValueError(
+                f"inputs must have shape (batch, time, {self.input_channels})"
+            )
         if lengths.ndim != 1 or len(lengths) != len(inputs):
             raise ValueError("lengths must contain one value per batch item")
         if torch.any(lengths < 1) or torch.any(lengths > inputs.shape[1]):
@@ -132,7 +137,7 @@ class ResidualBlock1d(nn.Module):
 
 
 class ResNetBiLSTMCTC(nn.Module):
-    """Residual 1D CNN-BiLSTM-CTC recognizer for six-axis IMU sequences."""
+    """Residual 1D CNN-BiLSTM-CTC recognizer for multichannel sensor sequences."""
 
     def __init__(
         self,
@@ -231,12 +236,14 @@ def _mask_temporal_padding(features: torch.Tensor, lengths: torch.Tensor) -> tor
 MODEL_TYPES = ("cnn_bilstm_ctc", "resnet_bilstm_ctc")
 
 
-def default_model_config(model_type: str, num_classes: int) -> dict:
+def default_model_config(
+    model_type: str, num_classes: int, input_channels: int = 6
+) -> dict:
     """Return the fixed, documented starting configuration for an architecture."""
     if model_type == "cnn_bilstm_ctc":
         return {
             "num_classes": num_classes,
-            "input_channels": 6,
+            "input_channels": input_channels,
             "conv_channels": 32,
             "hidden_size": 64,
             "lstm_layers": 2,
@@ -245,7 +252,7 @@ def default_model_config(model_type: str, num_classes: int) -> dict:
     if model_type == "resnet_bilstm_ctc":
         return {
             "num_classes": num_classes,
-            "input_channels": 6,
+            "input_channels": input_channels,
             "channels": [64, 128, 256],
             "hidden_size": 256,
             "lstm_layers": 3,

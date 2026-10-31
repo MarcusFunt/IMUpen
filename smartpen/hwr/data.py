@@ -1,7 +1,9 @@
-"""OnHW-Words500 writer-independent fold loading and six-axis adaptation."""
+"""Full-fidelity OnHW-Words500 loading and explicit sensor adapters."""
 from __future__ import annotations
 
+import hashlib
 import pickle
+import re
 import zipfile
 import importlib
 import json
@@ -11,6 +13,14 @@ from pathlib import Path
 from typing import BinaryIO
 
 import numpy as np
+
+from smartpen.hwr.sensors import (
+    ONHW_CHANNEL_NAMES,
+    ONHW_CHANNEL_UNITS,
+    ONHW_SAMPLE_RATE_HZ,
+    extract_profile,
+    resolve_sensor_profile,
+)
 
 
 # The sequence dataset uses this 59-character order. 59 is also the padding
@@ -30,6 +40,16 @@ class SequenceRecord:
     sample_index: int = 0
     session_id: str | None = None
     sample_id: str | None = None
+    source_id: str | None = None
+    content_sha256: str | None = None
+    dataset_variant: str | None = None
+    archive_name: str | None = None
+    fold: int | None = None
+    partition: str | None = None
+    channel_names: tuple[str, ...] = ()
+    channel_units: tuple[str, ...] = ()
+    sample_rate_hz: float | None = None
+    sensor_profile_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +57,8 @@ class OnHWFold:
     train: list[SequenceRecord]
     validation: list[SequenceRecord]
     fold: int
+    split_family: str = "writer_independent"
+    archive_name: str | None = None
     dropped_train: int = 0
     dropped_validation: int = 0
 
@@ -94,7 +116,7 @@ def _load_pickle(stream: BinaryIO):
 
 
 def select_six_axis(sequence: np.ndarray) -> np.ndarray:
-    """Return [front accel x/y/z, gyro x/y/z] as a contiguous float32 array.
+    """Legacy adapter: return front accel xyz and gyro xyz as float32.
 
     The OnHW sequence files contain 13 sensor channels ordered as front
     accelerometer (3), rear accelerometer (3), gyroscope (3), magnetometer
@@ -113,6 +135,65 @@ def select_six_axis(sequence: np.ndarray) -> np.ndarray:
             f"expected 6 recorder channels or 13 OnHW channels, got {values.shape[1]}"
         )
     return np.ascontiguousarray(selected, dtype=np.float32)
+
+
+def _content_fingerprint(sequence: np.ndarray) -> str:
+    """Hash a canonical float32 representation, including shape information."""
+    values = np.asarray(sequence, dtype="<f4", order="C")
+    digest = hashlib.sha256()
+    digest.update(f"{values.shape[0]}x{values.shape[1]}|f32le|".encode("ascii"))
+    digest.update(values.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def apply_sensor_profile(
+    records: list[SequenceRecord], profile: str
+) -> list[SequenceRecord]:
+    """Return records projected to one explicit measured-channel profile."""
+    from dataclasses import replace
+
+    resolved = resolve_sensor_profile(profile)
+    selected_records = []
+    for record in records:
+        if record.sensor_profile_id == resolved.profile_id:
+            selected_records.append(record)
+            continue
+        features = extract_profile(record.features, resolved)
+        selected_records.append(
+            replace(
+                record,
+                features=features,
+                channel_names=resolved.channel_names,
+                channel_units=resolved.units,
+                sensor_profile_id=resolved.profile_id,
+            )
+        )
+    return selected_records
+
+
+def _split_family(source: Path, archive_prefix: str | None = None) -> str:
+    def detect(value: str) -> str | None:
+        normalized = value.lower()
+        if "indep" in normalized:
+            return "writer_independent"
+        if re.search(r"(^|[^a-z])dep([^a-z]|$)", normalized):
+            return "writer_dependent"
+        return None
+
+    filename_family = detect(source.name)
+    internal_family = detect(archive_prefix or "")
+    if filename_family and internal_family and filename_family != internal_family:
+        raise ValueError(
+            f"archive filename indicates {filename_family}, but its data folder indicates "
+            f"{internal_family}"
+        )
+    family = filename_family or internal_family or detect(source.as_posix())
+    if family:
+        return family
+    raise ValueError(
+        "could not identify the official Words500 split family from the archive "
+        "name or internal directory; include 'dep' or 'indep' in its path"
+    )
 
 
 def decode_onhw_label(padded_tokens: list[int] | tuple[int, ...]) -> str:
@@ -401,11 +482,13 @@ def _read(path: Path | None = None, *, archive=None, member: str | None = None):
 
 
 def load_onhw_words500(path: str | Path, fold: int = 0) -> OnHWFold:
-    """Load one official writer-independent Words500 fold from a ZIP or extract.
+    """Load a full-fidelity official Words500 fold from ZIP or extracted files.
 
     Pickle files are loaded with a restricted unpickler that permits only
     NumPy reconstruction globals; archive data is never accepted as code.
-    The supplied `*_indep.zip` fold defines the held-out writer partition.
+    The official `dep` and `indep` variants retain their distinct split rules.
+    Records keep all 13 sensor channels; six-axis users should call the explicit
+    :func:`select_six_axis` compatibility adapter after loading.
     """
     if fold not in range(5):
         raise ValueError(f"fold must be between 0 and 4, got {fold}")
@@ -414,19 +497,24 @@ def load_onhw_words500(path: str | Path, fold: int = 0) -> OnHWFold:
         raise FileNotFoundError(source)
 
     archive = None
+    archive_prefix = None
     if source.is_file() and zipfile.is_zipfile(source):
         archive = zipfile.ZipFile(source)
-        files, _ = _resolve_zip_members(archive, fold)
+        try:
+            files, archive_prefix = _resolve_zip_members(archive, fold)
+        except Exception:
+            archive.close()
+            raise
         read = lambda filename: _read(archive=archive, member=files[filename])
-        is_writer_independent = "indep" in source.name.lower()
     elif source.is_dir():
         files, directory = _resolve_directory_files(source, fold)
+        archive_prefix = directory
         read = lambda filename: _read(path=files[filename])
-        is_writer_independent = "indep" in str(source).lower()
     else:
         raise ValueError(f"expected an extracted OnHW folder or ZIP archive: {source}")
 
     try:
+        split_family = _split_family(source, archive_prefix)
         records: dict[str, list[SequenceRecord]] = {}
         dropped: dict[str, int] = {}
         for split in ("train", "val"):
@@ -440,15 +528,41 @@ def load_onhw_words500(path: str | Path, fold: int = 0) -> OnHWFold:
             for sample_index, (sequence, label, writer_id) in enumerate(
                 zip(sequences, labels, writer_ids)
             ):
-                features = select_six_axis(np.asarray(sequence))
+                features = np.asarray(sequence)
+                if features.ndim != 2 or features.shape[1] != ONHW_SENSOR_CHANNELS:
+                    raise ValueError(
+                        f"expected a (timesteps, 13) OnHW sequence, got {features.shape}"
+                    )
+                features = np.ascontiguousarray(features, dtype=np.float32)
                 text = decode_onhw_label(label)
                 if not text:
                     raise ValueError(f"empty OnHW label in {split} split")
                 if features.shape[0] == 0:
                     removed += 1
                     continue
+                if not np.isfinite(features).all():
+                    raise ValueError(
+                        f"non-finite OnHW values in {split} sample {sample_index}"
+                    )
                 split_records.append(
-                    SequenceRecord(features, text, int(writer_id), sample_index)
+                    SequenceRecord(
+                        features=features,
+                        text=text,
+                        writer_id=int(writer_id),
+                        sample_index=sample_index,
+                        sample_id=(
+                            f"onhw-words500:{source.name}:{split_family}:fold-{fold}:"
+                            f"{split}:{sample_index}"
+                        ),
+                        content_sha256=_content_fingerprint(features),
+                        dataset_variant=split_family,
+                        archive_name=source.name,
+                        fold=fold,
+                        partition=split,
+                        channel_names=ONHW_CHANNEL_NAMES,
+                        channel_units=ONHW_CHANNEL_UNITS,
+                        sample_rate_hz=ONHW_SAMPLE_RATE_HZ,
+                    )
                 )
             records[split] = split_records
             dropped[split] = removed
@@ -456,15 +570,42 @@ def load_onhw_words500(path: str | Path, fold: int = 0) -> OnHWFold:
         train_writers = {record.writer_id for record in records["train"]}
         validation_writers = {record.writer_id for record in records["val"]}
         overlap = train_writers & validation_writers
-        if overlap:
-            kind = "writer-independent " if is_writer_independent else ""
+        if split_family == "writer_independent" and overlap:
             raise ValueError(
-                f"{kind}OnHW fold {fold} leaks {len(overlap)} writers across train/val"
+                f"writer-independent OnHW fold {fold} leaks {len(overlap)} writers across train/val"
+            )
+        if split_family == "writer_dependent":
+            if train_writers != validation_writers:
+                raise ValueError(
+                    "writer-dependent OnHW folds must contain the same writer IDs "
+                    "in train and validation"
+                )
+            for writer_id in train_writers:
+                train_words = {
+                    record.text for record in records["train"]
+                    if record.writer_id == writer_id
+                }
+                validation_words = {
+                    record.text for record in records["val"]
+                    if record.writer_id == writer_id
+                }
+                if train_words & validation_words:
+                    raise ValueError(
+                        f"writer-dependent OnHW fold {fold} reuses word identities "
+                        f"for writer {writer_id}"
+                    )
+        train_fingerprints = {record.content_sha256 for record in records["train"]}
+        validation_fingerprints = {record.content_sha256 for record in records["val"]}
+        if train_fingerprints & validation_fingerprints:
+            raise ValueError(
+                "identical canonical sensor recordings occur in train and validation"
             )
         return OnHWFold(
             train=records["train"],
             validation=records["val"],
             fold=fold,
+            split_family=split_family,
+            archive_name=source.name,
             dropped_train=dropped["train"],
             dropped_validation=dropped["val"],
         )
