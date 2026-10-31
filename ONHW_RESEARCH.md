@@ -1,6 +1,6 @@
-# OnHW-Words500 research guide
+# OnHW research guide
 
-This guide is the current research workflow for IMUpen. It supersedes the hardware-first sequencing in earlier milestone documents. The goal is to compare sensor profiles and learning methods on recordings that already exist before drawing conclusions about future hardware.
+This guide documents separate research workflows for OnHW-Words500 and OnHW-Chars. They are distinct datasets with different label spaces and evaluation metrics; do not combine their scores. It supersedes the hardware-first sequencing in earlier milestone documents. The goal is to compare sensor profiles and learning methods on recordings that already exist before drawing conclusions about future hardware.
 
 ## Research questions and experiment factors
 
@@ -152,3 +152,33 @@ Force may help recognize motion or contact structure within pre-segmented labele
 M4, M5, M6-A/B/C/D source implementations and their focused commands remain available. The common official runner and sweep scheduler handle M4/M5 supervised CTC; the matched factorial runner handles four matched CTC cells. OnHW single-writer/few-shot model training, broad M6 strategy sweeps, and confirmation-stage orchestration remain future work. The existing M6 personalization commands primarily exercise the prototype's personal six-axis recordings and should not be presented as full OnHW writer-generalization studies.
 
 Hardware validation, sensor simulation, desktop GUI work, and continuous-stream segmentation are outside the current OnHW research milestone.
+
+## Separate OnHW-Chars classification workflow
+
+OnHW-Chars is a different corpus from Words500. It contains single handwritten letters in `both` (uppercase and lowercase), `lower`, and `upper` variants, with five official writer-dependent (`dep`) and five writer-independent (`indep`) folds per variant. Use the published split membership. The archive has 13-channel variable-length sensor traces, but its README says the data are not sensor-calibrated; the archive does not provide writer IDs or a confirmed sample rate. Reports therefore preserve the raw-value units label, do not claim a writer overlap audit, and do not calculate writer-clustered intervals.
+
+The loader counts and drops empty traces, rejects malformed or non-finite examples, and resolves exact duplicate traces deterministically (test copy takes priority across partitions). Each experiment makes a fixed stratified development split from the official training partition for checkpoint selection; the official test partition is evaluated once after selection. The CTC output alphabet is restricted to the selected corpus variant. Primary metrics are exact character accuracy, balanced accuracy, macro-F1, per-class precision/recall/F1, and the confusion matrix. Word error rate is not defined for this character task.
+
+Example configuration for the full `both` writer-independent screen across every measured sensor profile and all five folds:
+
+```json
+{
+  "data": "../datasets/onhw-chars_2021-06-30.zip",
+  "corpora": ["both"],
+  "protocols": ["indep"],
+  "folds": [0, 1, 2, 3, 4],
+  "sensor_profiles": "all",
+  "model_types": ["resnet_bilstm_ctc"],
+  "seeds": [1337],
+  "epochs": 10,
+  "batch_size": 32,
+  "device": "auto",
+  "num_threads": 8,
+  "development_fraction": 0.1,
+  "development_seed": 2026
+}
+```
+
+Run `smartpen-hwr run-chars-sweep --config experiments/onhw_chars_screen.json --output runs/onhw-chars --dry-run` to check the 155 planned runs, then remove `--dry-run` to train. Full profile ranking remains exploratory. The runner records fold-level means and standard deviations plus paired test-example contrasts for the prespecified sensor comparisons. Since the archive omits writer identities, those contrasts and fold summaries are descriptive rather than writer-population confidence intervals. Do not describe these results as Words500 word recognition or as confirmation of another sensor placement.
+
+The official dataset description and paper are available from the [Fraunhofer OnHW dataset page](https://www.iis.fraunhofer.de/de/ff/lv/dataanalytics/anwproj/schreibtrainer/onhw-dataset.html) and Ott et al., [DOI 10.1145/3411842](https://doi.org/10.1145/3411842).

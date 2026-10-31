@@ -52,6 +52,87 @@ def corpus_error_rates(
     }
 
 
+def single_character_metrics(
+    hypotheses: Sequence[str],
+    references: Sequence[str],
+    *,
+    labels: Sequence[str] | None = None,
+    summary_only: bool = False,
+) -> dict:
+    """Report classification metrics for one-character OnHW-Chars sequences.
+
+    Word error rate is deliberately omitted: each example is a single letter,
+    so the task is classification rather than word-sequence recognition.
+    """
+    if len(hypotheses) != len(references):
+        raise ValueError("hypothesis and reference counts must match")
+    if any(len(reference) != 1 for reference in references):
+        raise ValueError("single-character references must contain exactly one character")
+    if not references:
+        raise ValueError("single-character metrics require at least one reference")
+    class_labels = sorted(set(references)) if labels is None else list(labels)
+    if len(class_labels) != len(set(class_labels)) or any(len(label) != 1 for label in class_labels):
+        raise ValueError("labels must be unique single characters")
+    if not set(references).issubset(class_labels):
+        raise ValueError("every reference character must appear in labels")
+
+    label_index = {label: index for index, label in enumerate(class_labels)}
+    confusion = [[0 for _ in class_labels] for _ in class_labels]
+    counts = {label: 0 for label in class_labels}
+    correct = {label: 0 for label in class_labels}
+    predicted_counts = {label: 0 for label in class_labels}
+    exact = 0
+    invalid_predictions = 0
+    for hypothesis, reference in zip(hypotheses, references):
+        counts[reference] += 1
+        if len(hypothesis) == 1 and hypothesis in label_index:
+            predicted_counts[hypothesis] += 1
+            confusion[label_index[reference]][label_index[hypothesis]] += 1
+        else:
+            invalid_predictions += 1
+        if hypothesis == reference:
+            exact += 1
+            correct[reference] += 1
+
+    per_class = {}
+    f1_values = []
+    recalls = []
+    for label in class_labels:
+        precision = correct[label] / max(predicted_counts[label], 1)
+        recall = correct[label] / max(counts[label], 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+        per_class[label] = {
+            "reference_count": counts[label],
+            "correct_count": correct[label],
+            "predicted_count": predicted_counts[label],
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+        if counts[label]:
+            f1_values.append(f1)
+            recalls.append(recall)
+
+    result = {
+        "metric": "single_character_classification",
+        "accuracy": exact / len(references),
+        "balanced_accuracy": float(np.mean(recalls)),
+        "macro_f1": float(np.mean(f1_values)),
+        "correct_count": exact,
+        "sample_count": len(references),
+        "invalid_prediction_count": invalid_predictions,
+    }
+    if not summary_only:
+        result.update(
+            {
+                "labels": class_labels,
+                "per_class": per_class,
+                "confusion_matrix": confusion,
+            }
+        )
+    return result
+
+
 def per_writer_error_rates(
     hypotheses: Sequence[str],
     references: Sequence[str],

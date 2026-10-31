@@ -1,0 +1,15 @@
+{
+  "data": "../datasets/onhw-chars_2021-06-30.zip",
+  "corpora": ["both"],
+  "protocols": ["indep"],
+  "folds": [0, 1, 2, 3, 4],
+  "sensor_profiles": "all",
+  "model_types": ["resnet_bilstm_ctc"],
+  "seeds": [1337],
+  "epochs": 10,
+  "batch_size": 32,
+  "device": "auto",
+  "num_threads": 8,
+  "development_fraction": 0.1,
+  "development_seed": 2026
+}

@@ -1,6 +1,6 @@
 # IMUpen
 
-IMUpen is a research platform for inertial handwriting recognition. Its next milestone is a reproducible experimental sweep on the measured OnHW-Words500 recordings. The physical pen remains a separate prototype and data-collection track; the immediate research work does not depend on choosing new hardware.
+IMUpen is a research platform for inertial handwriting recognition. Its research workflows cover the separate OnHW-Words500 and OnHW-Chars datasets. The physical pen remains a separate prototype and data-collection track; these benchmark results do not depend on choosing new hardware.
 
 ## Research workflow
 
@@ -31,13 +31,19 @@ Run a configured profile × model × fold × seed screen with `smartpen-hwr run-
 
 For a matched writer × vocabulary development experiment, use `smartpen-hwr run-factorial` with target writer IDs. The runner fixes the query recordings across W0V0, W0V1, W1V0, and W1V1, writes cell manifests, and reports paired macro-writer effects with writer-level bootstrap intervals. These custom runs are clearly marked and do not replace either official benchmark.
 
+## OnHW-Chars
+
+OnHW-Chars is a separate character dataset and task. It contains `both`, `lower`, and `upper` alphabets, each with writer-dependent and writer-independent five-fold splits. The `run-chars-sweep` command reports letter accuracy, balanced accuracy, macro-F1, per-class metrics, and confusion matrices. Its reports are labeled character classification and never use Words500 word-error metrics. Chars files do not provide writer IDs, sensor calibration, or a confirmed sample rate, so results use raw sensor values and cannot support writer-clustered confidence intervals.
+
+Place the separately obtained archive at `datasets/onhw-chars_2021-06-30.zip` and run a full five-fold M5 screen across the 31 measured sensor profiles with `smartpen-hwr run-chars-sweep --config experiments/onhw_chars_screen.json --output runs/onhw-chars`. The example configuration is in [experiments/onhw_chars_screen.json](experiments/onhw_chars_screen.json). Run `--dry-run` first to record the planned profile × fold combinations. The default configuration does not cap samples; use a narrower profile list or fewer epochs if local compute is limited.
+
 ## Prototype collection track
 
 The repository also contains firmware and Python collection tools for a Seeed Studio XIAO ESP32-S3 and standalone ST LSM6DS3. That hardware setup is not the OnHW DigiPen and its recordings do not establish the value of OnHW sensor placements. The [Sprint 1 document](SMARTPEN_SPRINT1.md) is retained as a historical collection milestone. Hardware integration and continuous-stream word segmentation remain future work.
 
 ## Development
 
-Install test and GUI dependencies with `python -m pip install -e ".[test,gui]"`. Run `python -m pytest -q` for the host test suite. The OnHW dataset is separate from this MIT-licensed repository and must be obtained from its maintainers.
+Install test and GUI dependencies with `python -m pip install -e ".[test,gui]"`. Run `python -m pytest -q` for the host test suite. OnHW datasets are separate from this MIT-licensed repository and must be obtained from their maintainers.
 
 See [firmware/README.md](firmware/README.md) for the USB protocol and collector instructions. The timestamp grid is nominally 208 Hz for the prototype firmware; OnHW-Words500 is recorded at 100 Hz. Keep those data sources and rates distinct.
 

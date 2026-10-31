@@ -1,4 +1,4 @@
-"""Full-fidelity OnHW-Words500 loading and explicit sensor adapters."""
+"""Full-fidelity OnHW loading and explicit sensor adapters."""
 from __future__ import annotations
 
 import hashlib
@@ -36,7 +36,7 @@ ONHW_SIX_AXIS_COLUMNS = (0, 1, 2, 6, 7, 8)  # front accel xyz, gyro xyz
 class SequenceRecord:
     features: np.ndarray
     text: str
-    writer_id: int | str
+    writer_id: int | str | None
     sample_index: int = 0
     session_id: str | None = None
     sample_id: str | None = None
@@ -63,12 +63,14 @@ class OnHWFold:
     dropped_validation: int = 0
 
     @property
-    def train_writers(self) -> set[int]:
-        return {record.writer_id for record in self.train}
+    def train_writers(self) -> set[int | str]:
+        return {record.writer_id for record in self.train if record.writer_id is not None}
 
     @property
-    def validation_writers(self) -> set[int]:
-        return {record.writer_id for record in self.validation}
+    def validation_writers(self) -> set[int | str]:
+        return {
+            record.writer_id for record in self.validation if record.writer_id is not None
+        }
 
 
 @dataclass(frozen=True)
@@ -163,8 +165,16 @@ def apply_sensor_profile(
             replace(
                 record,
                 features=features,
-                channel_names=resolved.channel_names,
-                channel_units=resolved.units,
+                channel_names=(
+                    tuple(record.channel_names[index] for index in resolved.channel_indices)
+                    if len(record.channel_names) == record.features.shape[1]
+                    else resolved.channel_names
+                ),
+                channel_units=(
+                    tuple(record.channel_units[index] for index in resolved.channel_indices)
+                    if len(record.channel_units) == record.features.shape[1]
+                    else resolved.units
+                ),
                 sensor_profile_id=resolved.profile_id,
             )
         )

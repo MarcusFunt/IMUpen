@@ -16,6 +16,7 @@ from smartpen.hwr.experiments import (
     run_sweep,
     run_writer_vocabulary_factorial,
 )
+from smartpen.hwr.chars_experiments import run_onhw_chars_sweep
 from smartpen.hwr.personal import (
     run_onhw_encoder_pretraining,
     run_personal_comparison,
@@ -31,7 +32,7 @@ from smartpen.hwr.training import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train and evaluate CTC handwriting models on OnHW-Words500."
+        description="Train and evaluate handwriting models on declared OnHW or personal-data protocols."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -57,6 +58,14 @@ def _parser() -> argparse.ArgumentParser:
     sweep.add_argument("--config", required=True, help="JSON sweep configuration")
     sweep.add_argument("--output", required=True, help="root directory for sweep artifacts")
     sweep.add_argument("--dry-run", action="store_true", help="validate and record every run plan")
+
+    chars_sweep = commands.add_parser(
+        "run-chars-sweep",
+        help="run a resumable OnHW-Chars single-character classification sweep",
+    )
+    chars_sweep.add_argument("--config", required=True, help="OnHW-Chars JSON sweep configuration")
+    chars_sweep.add_argument("--output", required=True, help="root directory for Chars artifacts")
+    chars_sweep.add_argument("--dry-run", action="store_true", help="validate and record every run plan")
 
     factorial = commands.add_parser(
         "run-factorial",
@@ -272,6 +281,14 @@ def main() -> None:
         return
     if args.command == "run-sweep":
         report = run_sweep(
+            config_path=args.config,
+            output_dir=args.output,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if args.command == "run-chars-sweep":
+        report = run_onhw_chars_sweep(
             config_path=args.config,
             output_dir=args.output,
             dry_run=args.dry_run,

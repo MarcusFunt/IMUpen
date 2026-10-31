@@ -43,6 +43,7 @@ from smartpen.hwr.metrics import (
     corpus_error_rates,
     paired_writer_bootstrap,
     per_writer_error_rates,
+    single_character_metrics,
 )
 from smartpen.hwr.model import (
     MODEL_TYPES,
@@ -482,8 +483,14 @@ def run_training(
     resume: bool = False,
     records_override: OnHWFold | None = None,
     custom_split_manifest: dict | None = None,
+    dataset_name: str = "OnHW-Words500",
+    protocol_label: str | None = None,
+    dataset_summary: dict | None = None,
+    writer_ids_available: bool = True,
+    metric_mode: str = "word_sequence",
+    label_charset: str | None = None,
 ) -> dict:
-    """Train on one official OnHW fold using a declared measured sensor profile."""
+    """Train a CTC model on one declared OnHW split and sensor profile."""
     if epochs < 1 or batch_size < 1 or num_threads < 1:
         raise ValueError("epochs, batch_size, and num_threads must be positive")
     if device_name == "auto":
@@ -493,6 +500,13 @@ def run_training(
         raise ValueError("CUDA was requested but is not available")
     if model_type not in MODEL_TYPES:
         raise ValueError(f"unknown model type {model_type!r}; choose from {MODEL_TYPES}")
+    if metric_mode not in {"word_sequence", "single_character"}:
+        raise ValueError("metric_mode must be word_sequence or single_character")
+    active_charset = ONHW_CHARSET if label_charset is None else label_charset
+    if not active_charset or len(active_charset) != len(set(active_charset)):
+        raise ValueError("label_charset must contain unique characters")
+    if not writer_ids_available and custom_split_manifest is not None:
+        raise ValueError("custom writer/vocabulary factorial training requires writer IDs")
     transforms, add_concatenations = augmentation_plan(augmentation)
     if augmentation not in AUGMENTATION_NAMES:
         raise ValueError(f"unknown augmentation {augmentation!r}")
@@ -512,11 +526,25 @@ def run_training(
     fold_data: OnHWFold = records_override or load_onhw_words500(data_path, fold=fold)
     train_writers = fold_data.train_writers
     validation_writers = fold_data.validation_writers
-    writer_overlap = not train_writers.isdisjoint(validation_writers)
-    if fold_data.split_family == "writer_independent" and writer_overlap:
+    writer_overlap = (
+        not train_writers.isdisjoint(validation_writers) if writer_ids_available else None
+    )
+    if (
+        writer_ids_available
+        and fold_data.split_family == "writer_independent"
+        and writer_overlap
+    ):
         raise ValueError("writer leakage between official writer-independent partitions")
-    if fold_data.split_family == "writer_dependent" and not writer_overlap:
+    if (
+        writer_ids_available
+        and fold_data.split_family == "writer_dependent"
+        and not writer_overlap
+    ):
         raise ValueError("official writer-dependent partitions must share writers")
+    if not writer_ids_available and any(
+        record.writer_id is not None for record in fold_data.train + fold_data.validation
+    ):
+        raise ValueError("writer_ids_available=False requires unknown writer IDs to remain null")
     if custom_split_manifest is not None:
         if max_train_samples is not None:
             raise ValueError(
@@ -544,6 +572,13 @@ def run_training(
 
     profiled_train = apply_sensor_profile(fold_data.train, profile.profile_id)
     profiled_validation = apply_sensor_profile(fold_data.validation, profile.profile_id)
+    if metric_mode == "single_character" and any(
+        len(record.text) != 1 for record in profiled_train + profiled_validation
+    ):
+        raise ValueError("single-character classification requires one-character references")
+    if any(character not in active_charset for record in profiled_train + profiled_validation
+           for character in record.text):
+        raise ValueError("a reference contains a character outside label_charset")
     for partition, records in (("train", profiled_train), ("validation", profiled_validation)):
         for record in records:
             values = np.asarray(record.features)
@@ -561,8 +596,11 @@ def run_training(
                     f"{partition} sample {record.sample_id or record.sample_index} "
                     "contains non-finite sensor values"
                 )
-    feasible_train, dropped_train_ctc = keep_ctc_feasible(profiled_train)
-    feasible_validation, dropped_validation_ctc = keep_ctc_feasible(profiled_validation)
+    blank_index = len(active_charset)
+    feasible_train, dropped_train_ctc = keep_ctc_feasible(profiled_train, active_charset)
+    feasible_validation, dropped_validation_ctc = keep_ctc_feasible(
+        profiled_validation, active_charset
+    )
     train_records, train_indices = select_records(feasible_train, max_train_samples, seed)
     validation_records, validation_indices = select_records(
         feasible_validation, max_validation_samples, seed + 1
@@ -576,7 +614,7 @@ def run_training(
         concatenate_training_records(
             train_records,
             seed=seed,
-            charset=ONHW_CHARSET,
+            charset=active_charset,
             delimiter=concat_delimiter,
             gap_frames=concat_gap_frames,
         )
@@ -589,7 +627,7 @@ def run_training(
     augmented_train_records = train_records + concatenated_records
 
     config = default_model_config(
-        model_type, ONHW_BLANK_INDEX + 1, input_channels=profile.input_channels
+        model_type, blank_index + 1, input_channels=profile.input_channels
     )
     if model_config:
         config.update(model_config)
@@ -609,18 +647,19 @@ def run_training(
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
+    loss_function = nn.CTCLoss(blank=blank_index, zero_infinity=True)
     train_loader, train_sampler = _loader(
         augmented_train_records,
         batch_size,
         seed,
         mean,
         std,
+        charset=active_charset,
         augmentation_transforms=transforms,
         augmentation_seed=seed,
     )
     validation_loader, _ = _loader(
-        validation_records, batch_size, seed + 1, mean, std
+        validation_records, batch_size, seed + 1, mean, std, charset=active_charset
     )
 
     output = Path(output_dir)
@@ -651,6 +690,11 @@ def run_training(
         "concat_delimiter": concat_delimiter if add_concatenations else None,
         "concat_gap_frames": concat_gap_frames if add_concatenations else None,
         "custom_split_manifest": custom_split_manifest,
+        "dataset_name": dataset_name,
+        "protocol_label": protocol_label,
+        "writer_ids_available": writer_ids_available,
+        "metric_mode": metric_mode,
+        "label_charset": active_charset,
         "code_provenance": code_provenance(),
     }
     resume_signature_sha256 = hashlib.sha256(
@@ -708,6 +752,8 @@ def run_training(
             optimizer,
             mixed_precision=use_mixed_precision,
             scaler=scaler,
+            charset=active_charset,
+            blank_index=blank_index,
         )
         _synchronize_device(device)
         validation_started = time.perf_counter()
@@ -717,37 +763,56 @@ def run_training(
             loss_function,
             device,
             mixed_precision=use_mixed_precision,
+            charset=active_charset,
+            blank_index=blank_index,
             include_metadata=True,
         )
         metrics = corpus_error_rates(hypotheses, references)
+        if metric_mode == "single_character":
+            character_metrics = single_character_metrics(
+                hypotheses,
+                references,
+                labels=list(active_charset),
+                summary_only=True,
+            )
+            selection_value = 1.0 - character_metrics["accuracy"]
+        else:
+            character_metrics = None
+            selection_value = float(metrics["wer"])
         _synchronize_device(device)
         validation_seconds = time.perf_counter() - validation_started
         epoch_seconds = time.perf_counter() - epoch_started
-        epoch_results.append(
-            {
-                "epoch": epoch + 1,
-                "train_loss": train_loss,
-                "validation_loss": validation_loss,
-                "validation_cer": metrics["cer"],
-                "validation_wer": metrics["wer"],
-                "character_errors": metrics["character_errors"],
-                "reference_characters": metrics["reference_characters"],
-                "word_errors": metrics["word_errors"],
-                "reference_words": metrics["reference_words"],
-                "exact_word_accuracy": metrics["exact_word_accuracy"],
-                "exact_word_count": metrics["exact_word_count"],
-                "validation_samples": len(references),
-                "epoch_seconds": epoch_seconds,
-                "validation_seconds": validation_seconds,
-                "validation_samples_per_second": len(references) / max(validation_seconds, 1e-12),
-            }
-        )
+        epoch_report = {
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "validation_loss": validation_loss,
+            "validation_samples": len(references),
+            "epoch_seconds": epoch_seconds,
+            "validation_seconds": validation_seconds,
+            "validation_samples_per_second": len(references) / max(validation_seconds, 1e-12),
+        }
+        if metric_mode == "single_character":
+            epoch_report["validation_character_metrics"] = character_metrics
+        else:
+            epoch_report.update(
+                {
+                    "validation_cer": metrics["cer"],
+                    "validation_wer": metrics["wer"],
+                    "character_errors": metrics["character_errors"],
+                    "reference_characters": metrics["reference_characters"],
+                    "word_errors": metrics["word_errors"],
+                    "reference_words": metrics["reference_words"],
+                    "exact_word_accuracy": metrics["exact_word_accuracy"],
+                    "exact_word_count": metrics["exact_word_count"],
+                }
+            )
+        epoch_results.append(epoch_report)
 
-        if (metrics["wer"], validation_loss) < (
+        if (selection_value, validation_loss) < (
             best_validation_wer,
             best_validation_loss,
         ):
-            best_validation_wer = float(metrics["wer"])
+            best_validation_wer = float(selection_value)
             best_validation_loss = float(validation_loss)
             best_epoch = epoch + 1
             best_predictions = list(hypotheses)
@@ -785,16 +850,62 @@ def run_training(
     if best_model_state is None:
         raise RuntimeError("no completed epoch is available for checkpoint selection")
     model.load_state_dict(best_model_state)
+    final_metrics = (
+        single_character_metrics(
+            best_predictions,
+            best_references,
+                labels=list(active_charset),
+        )
+        if metric_mode == "single_character"
+        else corpus_error_rates(best_predictions, best_references)
+    )
+    channel_source = profiled_train[0] if profiled_train else None
+    effective_protocol = protocol_label or fold_data.split_family
+    effective_summary = dataset_summary or _official_split_summary(fold_data)
+    if metric_mode == "single_character":
+        checkpoint_criterion = (
+            "maximum exact-character accuracy, then minimum validation loss"
+        )
+    else:
+        checkpoint_criterion = "minimum validation WER, then validation loss"
+    writer_metrics = (
+        {
+            metric: float(
+                np.mean(
+                    [
+                        result[metric]
+                        for result in per_writer_error_rates(
+                            best_predictions, best_references, best_writer_ids
+                        ).values()
+                    ]
+                )
+            )
+            for metric in ("wer", "cer")
+        }
+        if writer_ids_available
+        else None
+    )
+    per_writer_metrics = (
+        per_writer_error_rates(best_predictions, best_references, best_writer_ids)
+        if writer_ids_available
+        else None
+    )
 
     report = {
         "schema_version": 1,
         "run_kind": "sample" if max_train_samples or max_validation_samples else "full",
-        "dataset": "OnHW-Words500",
-        "protocol": fold_data.split_family,
+        "dataset": dataset_name,
+        "task_type": (
+            "single-character classification"
+            if metric_mode == "single_character"
+            else "word-sequence recognition"
+        ),
+        "metric_mode": metric_mode,
+        "protocol": effective_protocol,
         "source_archive": Path(data_path).name,
         "archive_sha256": _sha256(Path(data_path)),
         "fold": fold,
-        "split": (
+        "split": protocol_label or (
             "custom writer/vocabulary factorial cell; query recordings are fixed across cells"
             if custom_split_manifest is not None
             else (
@@ -804,7 +915,8 @@ def run_training(
             )
         ),
         "writer_overlap": writer_overlap,
-        "official_split_summary": _official_split_summary(fold_data),
+        "writer_ids_available": writer_ids_available,
+        "official_split_summary": effective_summary,
         "custom_split_manifest": custom_split_manifest,
         "analysis_registration": {
             "primary_sensor_comparisons": list(PRIMARY_SENSOR_COMPARISONS),
@@ -823,23 +935,40 @@ def run_training(
         "sequence_concatenations_added": len(concatenated_records),
         "sequence_concatenations_dropped_ctc": dropped_concatenations_ctc,
         "validation_samples_used": len(validation_records),
-        "train_writers_available": len(train_writers),
-        "validation_writers_available": len(validation_writers),
-        "train_writers_sampled": len({record.writer_id for record in train_records}),
-        "validation_writers_sampled": len(
-            {record.writer_id for record in validation_records}
+        "train_writers_available": len(train_writers) if writer_ids_available else None,
+        "validation_writers_available": len(validation_writers) if writer_ids_available else None,
+        "train_writers_sampled": (
+            len({record.writer_id for record in train_records}) if writer_ids_available else None
         ),
-        "writer_leakage": fold_data.split_family == "writer_independent" and writer_overlap,
+        "validation_writers_sampled": (
+            len({record.writer_id for record in validation_records})
+            if writer_ids_available else None
+        ),
+        "writer_leakage": (
+            fold_data.split_family == "writer_independent" and bool(writer_overlap)
+            if writer_ids_available
+            else None
+        ),
         "sensor_profile": {
             "profile_id": profile.profile_id,
             "group_code": profile.group_code,
             "channel_indices": list(profile.channel_indices),
-            "channel_names": list(profile.channel_names),
-            "units": list(profile.units),
-            "sample_rate_hz": ONHW_SAMPLE_RATE_HZ,
+            "channel_names": list(channel_source.channel_names)
+            if channel_source is not None and channel_source.channel_names
+            else list(profile.channel_names),
+            "units": list(channel_source.channel_units)
+            if channel_source is not None and channel_source.channel_units
+            else list(profile.units),
+            "sample_rate_hz": channel_source.sample_rate_hz
+            if channel_source is not None
+            else ONHW_SAMPLE_RATE_HZ,
             "physical_description": profile.physical_description,
             "preprocessing": dict(profile.preprocessing),
-            "dataset_compatibility": profile.dataset_compatibility,
+            "dataset_compatibility": (
+                "onhw_chars_13_channel"
+                if dataset_name == "OnHW-Chars"
+                else profile.dataset_compatibility
+            ),
         },
         "identity_policy": {
             "stable_source_ids_available": False,
@@ -918,26 +1047,12 @@ def run_training(
         "model_parameters": parameter_count,
         "mixed_precision": use_mixed_precision,
         "optimizer": "AdamW(lr=0.001, weight_decay=0.0001)",
-        "ctc": {"blank_index": ONHW_BLANK_INDEX, "zero_infinity": True},
+        "ctc": {"blank_index": blank_index, "zero_infinity": True},
+        "label_charset": active_charset,
         "epochs": epoch_results,
-        "final_metrics": corpus_error_rates(best_predictions, best_references),
-        "macro_writer_metrics": {
-            "wer": float(np.mean([
-                result["wer"]
-                for result in per_writer_error_rates(
-                    best_predictions, best_references, best_writer_ids
-                ).values()
-            ])),
-            "cer": float(np.mean([
-                result["cer"]
-                for result in per_writer_error_rates(
-                    best_predictions, best_references, best_writer_ids
-                ).values()
-            ])),
-        },
-        "per_writer_metrics": per_writer_error_rates(
-            best_predictions, best_references, best_writer_ids
-        ),
+        "final_metrics": final_metrics,
+        "macro_writer_metrics": writer_metrics,
+        "per_writer_metrics": per_writer_metrics,
         "validation_outputs": {
             "sample_ids": best_sample_ids,
             "writer_ids": best_writer_ids,
@@ -945,9 +1060,15 @@ def run_training(
             "references": best_references,
         },
         "checkpoint_selection": {
-            "criterion": "minimum validation WER, then validation loss",
+            "criterion": checkpoint_criterion,
             "selected_epoch": best_epoch,
             "selected_validation_loss": best_validation_loss,
+            "selected_error_score": best_validation_wer,
+            "selected_error_score_name": (
+                "character_error_rate"
+                if metric_mode == "single_character"
+                else "word_error_rate"
+            ),
         },
         "resumed_from_epoch": start_epoch,
         "training_seconds_this_attempt": training_seconds_this_attempt,
@@ -971,8 +1092,8 @@ def run_training(
         "model_config": config,
         "normalization_mean": torch.from_numpy(mean),
         "normalization_std": torch.from_numpy(std),
-        "charset": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄÖÜäöüß",
-        "blank_index": ONHW_BLANK_INDEX,
+        "charset": active_charset,
+        "blank_index": blank_index,
         "seed": seed,
         "fold": fold,
         "sensor_profile_id": profile.profile_id,
@@ -1011,8 +1132,15 @@ def evaluate_checkpoint(
     batch_size: int = 32,
     num_threads: int = 4,
     mixed_precision: bool | None = None,
+    records_override: OnHWFold | None = None,
+    dataset_name: str = "OnHW-Words500",
+    protocol_label: str | None = None,
+    dataset_summary: dict | None = None,
+    writer_ids_available: bool = True,
+    metric_mode: str = "word_sequence",
+    label_charset: str | None = None,
 ) -> dict:
-    """Evaluate a saved checkpoint on its held-out official writer split."""
+    """Evaluate a checkpoint on an official or explicitly supplied held-out split."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     selected_fold = int(checkpoint["fold"] if fold is None else fold)
     selected_seed = int(checkpoint["seed"] if seed is None else seed)
@@ -1024,14 +1152,28 @@ def evaluate_checkpoint(
     )
     if use_mixed_precision and device.type != "cuda":
         raise ValueError("mixed precision is supported only for CUDA evaluation")
+    if metric_mode not in {"word_sequence", "single_character"}:
+        raise ValueError("metric_mode must be word_sequence or single_character")
+    checkpoint_charset = checkpoint.get("charset", ONHW_CHARSET)
+    active_charset = checkpoint_charset if label_charset is None else label_charset
+    if active_charset != checkpoint_charset:
+        raise ValueError("evaluation charset does not match the checkpoint charset")
+    if not active_charset or len(active_charset) != len(set(active_charset)):
+        raise ValueError("label_charset must contain unique characters")
     seed_everything(selected_seed, device.type)
     torch.set_num_threads(num_threads)
-    fold_data = load_onhw_words500(data_path, selected_fold)
+    fold_data = records_override or load_onhw_words500(data_path, selected_fold)
     profile = resolve_sensor_profile(
         checkpoint.get("sensor_profile_id", "front_acc_gyro6")
     )
     profiled_validation = apply_sensor_profile(fold_data.validation, profile.profile_id)
-    records, dropped_ctc = keep_ctc_feasible(profiled_validation)
+    if any(character not in active_charset for record in profiled_validation
+           for character in record.text):
+        raise ValueError("a reference contains a character outside label_charset")
+    blank_index = int(checkpoint.get("blank_index", len(active_charset)))
+    if blank_index != len(active_charset):
+        raise ValueError("checkpoint CTC blank index does not follow its label charset")
+    records, dropped_ctc = keep_ctc_feasible(profiled_validation, active_charset)
     records, indices = select_records(records, max_validation_samples, selected_seed + 1)
     model_type = checkpoint.get("model_type", "cnn_bilstm_ctc")
     model = build_model(model_type, checkpoint["model_config"]).to(device)
@@ -1040,8 +1182,10 @@ def evaluate_checkpoint(
     model.load_state_dict(checkpoint["model_state"])
     mean = checkpoint["normalization_mean"].numpy().astype(np.float32)
     std = checkpoint["normalization_std"].numpy().astype(np.float32)
-    loader, _ = _loader(records, batch_size, selected_seed + 1, mean, std)
-    loss_function = nn.CTCLoss(blank=ONHW_BLANK_INDEX, zero_infinity=True)
+    loader, _ = _loader(
+        records, batch_size, selected_seed + 1, mean, std, charset=active_charset
+    )
+    loss_function = nn.CTCLoss(blank=blank_index, zero_infinity=True)
     _synchronize_device(device)
     inference_started = time.perf_counter()
     loss, hypotheses, references, writer_ids, sample_ids = _run_epoch(
@@ -1050,45 +1194,70 @@ def evaluate_checkpoint(
         loss_function,
         device,
         mixed_precision=use_mixed_precision,
+        charset=active_charset,
+        blank_index=blank_index,
         include_metadata=True,
     )
     _synchronize_device(device)
     inference_seconds = time.perf_counter() - inference_started
+    result_metrics = (
+        single_character_metrics(
+            hypotheses, references, labels=list(active_charset)
+        )
+        if metric_mode == "single_character"
+        else corpus_error_rates(hypotheses, references)
+    )
+    per_writer_metrics = (
+        per_writer_error_rates(hypotheses, references, writer_ids)
+        if writer_ids_available
+        else None
+    )
+    macro_writer_metrics = (
+        {
+            metric: float(np.mean([values[metric] for values in per_writer_metrics.values()]))
+            for metric in ("wer", "cer")
+        }
+        if per_writer_metrics is not None
+        else None
+    )
     result = {
-        "dataset": "OnHW-Words500",
-        "protocol": fold_data.split_family,
-        "official_split_summary": _official_split_summary(fold_data),
+        "dataset": dataset_name,
+        "task_type": (
+            "single-character classification"
+            if metric_mode == "single_character"
+            else "word-sequence recognition"
+        ),
+        "metric_mode": metric_mode,
+        "protocol": protocol_label or fold_data.split_family,
+        "official_split_summary": dataset_summary or _official_split_summary(fold_data),
         "sensor_profile_id": profile.profile_id,
         "model_type": model_type,
         "model_parameters": count_parameters(model),
         "fold": selected_fold,
         "validation_samples": len(records),
-        "validation_writers": len({record.writer_id for record in records}),
-        "writer_overlap": not fold_data.train_writers.isdisjoint(
-            fold_data.validation_writers
+        "writer_ids_available": writer_ids_available,
+        "validation_writers": (
+            len({record.writer_id for record in records}) if writer_ids_available else None
+        ),
+        "writer_overlap": (
+            not fold_data.train_writers.isdisjoint(fold_data.validation_writers)
+            if writer_ids_available
+            else None
         ),
         "writer_leakage": (
             fold_data.split_family == "writer_independent"
             and not fold_data.train_writers.isdisjoint(fold_data.validation_writers)
+            if writer_ids_available
+            else None
         ),
         "ctc_infeasible_recordings_dropped": dropped_ctc,
         "sample_indices": indices,
         "validation_loss": loss,
         "inference_seconds": inference_seconds,
         "inference_samples_per_second": len(records) / max(inference_seconds, 1e-12),
-        "metrics": corpus_error_rates(hypotheses, references),
-        "macro_writer_metrics": {
-            metric: float(np.mean([
-                writer_metrics[metric]
-                for writer_metrics in per_writer_error_rates(
-                    hypotheses, references, writer_ids
-                ).values()
-            ]))
-            for metric in ("wer", "cer")
-        },
-        "per_writer_metrics": per_writer_error_rates(
-            hypotheses, references, writer_ids
-        ),
+        "metrics": result_metrics,
+        "macro_writer_metrics": macro_writer_metrics,
+        "per_writer_metrics": per_writer_metrics,
         "validation_outputs": {
             "sample_ids": sample_ids,
             "writer_ids": writer_ids,
