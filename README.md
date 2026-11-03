@@ -14,6 +14,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/compile-firmware.ps1
 
 The board compile does not upload firmware. The validation plan separates software readiness from physical bring-up and handwriting feasibility; the [baseline record](docs/BASELINE.md) identifies what has and has not been checked in this workspace.
 
+## Desktop GUI concept
+
+An optional PySide6 desktop UI design is available. Its Record page includes an animated 3D board and IMU-axis preview driven by synthetic demo motion; dragging orbits the camera and pauses the demo for inspection. The UI does not connect to serial hardware, read or write capture files, export datasets, or train a recognition model. Install its separate UI dependency and launch it with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/run-gui.ps1
+```
+
+See [the GUI design brief](docs/GUI_DESIGN.md) for the intended capture, dataset, and future training workflows.
+
+The cross-platform verification command is `python tools/run_all.py --sanitizers` (requires a C++17 compiler). On Windows, the normal native tests use MinGW GCC; the sanitizer stages use LLVM-MinGW Clang because the WinLibs GCC package does not ship `libasan`/`libubsan`. Install the UCRT LLVM-MinGW toolchain if needed with `winget install --id MartinStorsjo.LLVM-MinGW.UCRT -e`. The runner executes the same firmware harness and FIFO decoder property test under ASan and UBSan. The nightly 30-minute synthetic check is `python tools/run_endurance.py --seconds 1800`. It writes ignored artifacts under `build/endurance/` and reports synthetic software evidence only.
+
 ## Wiring
 
 | XIAO ESP32-S3 | GPIO | IMU breakout |
@@ -50,8 +63,8 @@ The output directory contains:
 
 - `capture.csv`: raw values plus host arrival time and detected session number.
 - `events.jsonl`: port opens, planned interruptions, device messages, errors, and detected resets.
-- `report.json`: observed sequence gaps, queue drops, FIFO recoveries, overrun observations, read duration, interrupt-to-read latency, watermark intervals, and a clock-rate estimate per session and epoch.
-- `reconstructed.csv`: the raw rows with an estimated sample time on the ESP32 host clock when enough clean anchors exist.
+- `report.json`: observed sequence gaps, per-session cumulative counters, FIFO recoveries, overrun observations, read duration, interrupt-to-read latency, watermark intervals, and a robust clock fit per host session, boot, sequence run, and FIFO epoch.
+- `reconstructed.csv`: the raw rows with `estimated_sample_host_us` when enough valid anchors exist. That legacy-named column is expressed in the MCU IRQ clock (`mcu_irq_us_since_boot`); `host_elapsed_s` is the separate host receive clock. Blank reconstructed values mean there is no defensible fit.
 
 Re-run analysis with `.\.venv\Scripts\python.exe tools/measure.py report measurements/run01/capture.csv --output measurements/reanalysis`. The output schema is described by `FIELDS` in the script and by the firmware's startup header. Each row includes a random `boot_id`, sensor identity, host read sequence, FIFO epoch, batch and ISR count, interrupt and read times, FIFO state and pattern, six raw axes, and cumulative quality counters. `irq_us = -1` means that burst continued draining an asserted watermark without a new captured edge. `word_end` is the zero-based last word of that frame within the 48-word burst.
 
@@ -82,3 +95,14 @@ An optional exploratory alignment check is available for a **controlled rotation
 It compares the acceleration derivative with the rotation predicted by the gyro at integer sample offsets. The result reports correlation, lag, and sample-period resolution; positive offset means the comparison used a later gyro row. A tolerance result is emitted only for a sufficiently correlated interior peak. This is a conditional signal-based estimate, not proof of synchronization: periodic movement, filter delay, translation, vibration, sensor bias, and weak motion can invalidate it. Decide the acceptable tolerance for the intended handwriting analysis and use an independently timed motion reference to verify the result.
 
 The FIFO procedure and pattern follow the [LSM6DS3 datasheet](https://www.st.com/resource/en/datasheet/lsm6ds3.pdf) and [ST application note AN4650](https://community.st.com/ysqtg83639/attachments/ysqtg83639/mems-sensors-forum/21052/2/AN4650.PDF). Preserve native 208 Hz captures; make any 100 Hz derivative offline with anti-alias filtering.
+
+## Canonical dataset export
+
+Keep the raw capture unchanged. Create a versioned canonical dataset and optional 100 Hz derivative with explicit source and configuration provenance:
+
+```powershell
+python tools/dataset.py canonicalize measurements/run01/capture.csv --output measurements/run01/canonical.csv --source-type real --config configs/xiao_lsm6ds3_spi_208hz.yaml
+python tools/dataset.py resample measurements/run01/canonical.csv --output measurements/run01/canonical-100hz.csv --target-rate-hz 100
+```
+
+Both outputs have manifest sidecars. Canonical files preserve raw values and add scaled/corrected columns; resampling is segment-local and never crosses missing sequence numbers, time discontinuities, sessions, or FIFO epochs. See [the data schema](docs/DATA_SCHEMA.md), [report schema migration](docs/REPORT_SCHEMA_V2.md), and [simulator boundaries](docs/SIMULATOR_LIMITATIONS.md).
