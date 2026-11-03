@@ -1,0 +1,56 @@
+schema_version: 1
+configuration_id: xiao_lsm6ds3_spi_208hz_v1
+status: intended_configuration_not_physically_verified
+
+board:
+  name: Seeed XIAO ESP32-S3
+  fqbn: esp32:esp32:XIAO_ESP32S3
+  arduino_cli_version: 1.4.1
+  esp32_core_version: 3.3.6
+  usb_mode: hwcdc
+  usb_cdc_on_boot: default
+
+sensor:
+  family: LSM6DS3
+  expected_who_am_i: 0x69
+  confirmed_tr_c: false
+  breakout_revision: unknown
+  silicon_identity: unverified
+
+bus:
+  type: spi_4_wire
+  mode: 3
+  frequency_hz: 4000000
+  bit_order: msb_first
+  pins:
+    xiao_d8_gpio7: sck
+    xiao_d10_gpio9: mosi
+    xiao_d9_gpio8: miso
+    xiao_d3_gpio4: cs_active_low
+    xiao_d0_gpio1: int1_fifo_watermark
+    xiao_3v3: breakout_power_only_after_input_path_is_verified
+    xiao_gnd: common_ground
+
+acquisition:
+  nominal_odr_hz: 208
+  accelerometer_full_scale_g: 2
+  gyroscope_full_scale_dps: 500
+  fifo_mode: continuous
+  fifo_watermark_words: 48
+  fifo_words_per_frame: 6
+  output_queue_capacity_frames: 256
+  channel_order: [gx, gy, gz, ax, ay, az]
+  startup_frame_discarded: true
+
+telemetry:
+  schema: imupen_fifo_v1
+  raw_values_are_signed_int16: true
+  host_timestamps: microseconds_since_mcu_boot
+  preserve_raw_capture: true
+
+validation:
+  physical_hardware_tested: false
+  source_of_truth_note: >-
+    This file records the intended setup. Firmware constants remain in
+    firmware/IMUpen/IMUpen.ino until a versioned shared-configuration change
+    is implemented and tested.
