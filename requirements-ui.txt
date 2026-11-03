@@ -1,0 +1,2 @@
+# Optional desktop interface; kept separate from the hardware-free CLI setup.
+PySide6-Essentials==6.12.0

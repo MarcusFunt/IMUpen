@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Local-first IMUpen recording and dataset workstation concept">
+  <title>IMUpen Studio — interface concept</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #203239;
+      --muted: #627279;
+      --paper: #f4f5f1;
+      --surface: #ffffff;
+      --line: #d9e0dc;
+      --rail: #17343c;
+      --rail-muted: #a8bec0;
+      --teal: #137c73;
+      --teal-dark: #0e625c;
+      --teal-soft: #e0f1ec;
+      --amber: #8e5d10;
+      --amber-soft: #fff1d5;
+      --red: #a63f38;
+      --red-soft: #fbe9e6;
+      --slate-soft: #eef1ef;
+      --radius: 8px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --space-10: 40px;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.45; }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid #e5a93f; outline-offset: 2px;
+    }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+    .rail { background: var(--rail); color: #f7fbf9; padding: 24px 16px; display: flex; flex-direction: column; gap: 28px; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; }
+    .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #6b9796; border-radius: 9px; color: #d9f2eb; font-weight: 750; letter-spacing: -.05em; }
+    .brand-name { font-weight: 680; letter-spacing: -.02em; font-size: 16px; }
+    .brand-sub { color: var(--rail-muted); font-size: 11px; margin-top: 1px; }
+    .workspace-label { margin: 0 8px 8px; color: var(--rail-muted); text-transform: uppercase; font-size: 10px; letter-spacing: .1em; font-weight: 700; }
+    .nav { display: grid; gap: 4px; }
+    .nav button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 11px; border: 0; border-radius: 6px; color: #c2d2d1; background: transparent; text-align: left; font-weight: 550; }
+    .nav button:hover { background: #24454d; color: #fff; }
+    .nav button[aria-current="page"] { color: #fff; background: #2a5157; box-shadow: inset 3px 0 #65c4ad; }
+    .nav-icon { width: 18px; text-align: center; color: #a6c7c2; font-size: 15px; }
+    .rail-bottom { margin-top: auto; border-top: 1px solid #36535a; padding: 16px 8px 0; color: var(--rail-muted); font-size: 12px; }
+    .local-mark { display: flex; align-items: center; gap: 8px; color: #d1e2df; font-weight: 600; margin-bottom: 5px; }
+    .local-dot { width: 8px; height: 8px; border-radius: 50%; background: #68c6a9; }
+    main { min-width: 0; }
+    .topbar { height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 36px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.72); }
+    .crumb { color: var(--muted); font-size: 13px; }
+    .top-actions { display: flex; align-items: center; gap: 14px; }
+    .top-status { display: flex; align-items: center; gap: 8px; color: #41565c; font-size: 12px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #c98c2c; }
+    .avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #dde8e3; color: #30504d; font-size: 11px; font-weight: 700; }
+    .content { width: min(1440px, 100%); margin: 0 auto; padding: 32px 36px 48px; }
+    .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .09em; font-size: 10px; color: var(--muted); font-weight: 750; margin-bottom: 6px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.035em; font-weight: 680; }
+    h2 { font-size: 16px; line-height: 1.3; margin: 0; letter-spacing: -.015em; }
+    h3 { font-size: 13px; line-height: 1.35; margin: 0; font-weight: 650; }
+    p { margin: 0; }
+    .lede { margin-top: 7px; color: var(--muted); max-width: 640px; }
+    .btn { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border: 1px solid transparent; border-radius: 6px; font-weight: 650; white-space: nowrap; }
+    .btn-primary { background: var(--teal); color: white; }
+    .btn-primary:hover { background: var(--teal-dark); }
+    .btn-secondary { background: white; color: var(--ink); border-color: var(--line); }
+    .btn-secondary:hover { background: #f8faf8; border-color: #aebdb8; }
+    .btn-quiet { background: transparent; color: var(--teal-dark); padding-inline: 8px; }
+    .btn[disabled] { opacity: .47; cursor: not-allowed; }
+    .banner { display: flex; align-items: flex-start; gap: 12px; padding: 13px 16px; border: 1px solid #e6d4ad; border-left: 3px solid #c79037; background: #fffaf0; color: #5e4b2b; border-radius: 6px; margin: 0 0 22px; }
+    .banner strong { color: #4b3a1f; }
+    .banner small { display: block; margin-top: 2px; color: #78684b; font-size: 12px; }
+    .banner-icon { font-weight: 800; color: #9d6c1b; }
+    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, .9fr); gap: 22px; align-items: start; }
+    .stack { display: grid; gap: 18px; min-width: 0; }
+    .surface { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    .surface-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid #e9eeeb; }
+    .surface-body { padding: 20px; }
+    .surface-foot { padding: 13px 20px; background: #fafbf9; border-top: 1px solid #e9eeeb; color: var(--muted); font-size: 12px; }
+    .readiness { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .readiness-copy { display: grid; gap: 6px; }
+    .readiness-copy p { color: var(--muted); max-width: 460px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 9px; border-radius: 999px; font-size: 11px; line-height: 1.2; font-weight: 700; white-space: nowrap; }
+    .pill-amber { color: #74500f; background: var(--amber-soft); }
+    .pill-green { color: #176255; background: var(--teal-soft); }
+    .pill-slate { color: #4d6268; background: var(--slate-soft); }
+    .pill-red { color: #8b3934; background: var(--red-soft); }
+    .checklist { display: grid; gap: 0; margin-top: 20px; }
+    .check-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid #edf0ee; }
+    .check-icon { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid #d1dbd6; border-radius: 50%; color: #58736f; font-size: 12px; }
+    .check-title { font-weight: 620; font-size: 13px; }
+    .check-note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .mini-link { border: 0; background: transparent; color: var(--teal-dark); font-weight: 650; padding: 6px; }
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; padding: 0; list-style: none; }
+    .step { min-height: 108px; padding: 17px 17px 15px; border-right: 1px solid var(--line); }
+    .step:last-child { border: 0; }
+    .step-number { color: var(--teal); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+    .step-title { margin-top: 8px; font-weight: 650; }
+    .step-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
+    .session-list { list-style: none; padding: 0; margin: 0; }
+    .session-row { display: grid; grid-template-columns: minmax(160px, 1.4fr) minmax(90px, .75fr) minmax(90px, .75fr) auto; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid #edf0ee; }
+    .session-row:first-child { border-top: 0; }
+    .session-name { font-weight: 650; }
+    .session-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .session-cell { color: #475b61; font-size: 12px; }
+    .health-list { display: grid; gap: 13px; }
+    .health-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .health-name { color: #42565c; font-size: 13px; }
+    .health-value { font-size: 12px; font-weight: 650; }
+    .notice-block { background: #f6f8f6; border-radius: 6px; padding: 12px 13px; color: var(--muted); font-size: 12px; margin-top: 17px; }
+    .notice-block strong { color: var(--ink); }
+    .view[hidden] { display: none; }
+    .two-col { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: 20px; }
+    .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+    .field { display: grid; gap: 6px; }
+    label { font-size: 12px; color: #41565c; font-weight: 650; }
+    input, select, textarea { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid #cdd7d2; border-radius: 5px; background: white; color: var(--ink); }
+    textarea { resize: vertical; min-height: 80px; }
+    .field-help { color: var(--muted); font-size: 11px; }
+    .field-full { grid-column: 1 / -1; }
+    .device-state { display: flex; gap: 12px; align-items: flex-start; padding: 14px; background: #f7f8f6; border: 1px dashed #bfcac4; border-radius: 6px; }
+    .device-state-icon { color: #8a641d; font-size: 18px; }
+    .device-state-title { font-weight: 650; }
+    .device-state p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .wave { display: block; width: 100%; height: 120px; border: 1px solid #e4ebe7; border-radius: 5px; background: #f8fbf9; margin-top: 12px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .stat { padding: 12px; border-left: 2px solid #bfded4; background: #f8faf8; }
+    .stat-value { font-size: 18px; font-weight: 700; letter-spacing: -.03em; }
+    .stat-label { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 750; padding: 0 12px 10px; }
+    td { padding: 13px 12px; border-top: 1px solid #e9eeeb; font-size: 12px; white-space: nowrap; }
+    .disabled-panel { opacity: .74; }
+    .lock-note { padding: 12px 14px; background: var(--amber-soft); color: #654a1d; border-radius: 6px; font-size: 12px; margin-bottom: 18px; }
+    .split-visual { display: grid; grid-template-columns: 3fr 1fr; height: 14px; border-radius: 3px; overflow: hidden; background: #dce7e2; margin: 12px 0 8px; }
+    .split-train { background: var(--teal); }
+    .split-test { background: #d7a14b; }
+    .split-caption { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+    .footer-note { color: #718087; font-size: 11px; margin-top: 30px; text-align: right; }
+    .toast { position: fixed; bottom: 20px; right: 22px; max-width: min(420px, calc(100vw - 36px)); padding: 12px 16px; border: 1px solid #bcd3cc; border-radius: 6px; background: #f5fbf8; color: #214c46; box-shadow: 0 4px 18px #17343c1a; }
+    .toast[hidden] { display: none; }
+    @media (max-width: 1100px) {
+      .app { grid-template-columns: 214px minmax(0,1fr); }
+      .content { padding-inline: 24px; }
+      .topbar { padding-inline: 24px; }
+      .overview-grid, .two-col { grid-template-columns: minmax(0,1fr); }
+    }
+    @media (max-width: 720px) {
+      .app { display: block; }
+      .rail { padding: 12px 14px; gap: 10px; }
+      .brand { padding: 0 2px; }
+      .workspace-label, .rail-bottom { display: none; }
+      .nav { display: flex; overflow-x: auto; gap: 5px; padding-bottom: 2px; }
+      .nav button { width: auto; flex: 0 0 auto; padding: 9px 11px; }
+      .nav button[aria-current="page"] { box-shadow: inset 0 -2px #65c4ad; }
+      .nav-icon { display: none; }
+      .topbar { height: 52px; padding: 0 16px; }
+      .content { padding: 22px 16px 36px; }
+      .page-heading { flex-direction: column; }
+      .readiness { align-items: flex-start; flex-direction: column; }
+      .steps { grid-template-columns: 1fr; }
+      .step { border-right: 0; border-bottom: 1px solid var(--line); min-height: 0; }
+      .session-row { grid-template-columns: minmax(0,1fr) auto; }
+      .session-cell { display: none; }
+      .field-grid { grid-template-columns: 1fr; }
+      .field-full { grid-column: auto; }
+      .stat-grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand" aria-label="IMUpen Studio">
+        <div class="brand-mark" aria-hidden="true">IMU</div>
+        <div><div class="brand-name">IMUpen Studio</div><div class="brand-sub">Local research workspace</div></div>
+      </div>
+      <div>
+        <p class="workspace-label">Workspace</p>
+        <nav class="nav" aria-label="Main navigation">
+          <button type="button" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true">⌂</span>Overview</button>
+          <button type="button" data-view="record"><span class="nav-icon" aria-hidden="true">◉</span>Record</button>
+          <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true">▤</span>Sessions</button>
+          <button type="button" data-view="dataset"><span class="nav-icon" aria-hidden="true">⇩</span>Dataset</button>
+          <button type="button" data-view="train"><span class="nav-icon" aria-hidden="true">⌁</span>Train &amp; evaluate</button>
+        </nav>
+      </div>
+      <div class="rail-bottom">
+        <div class="local-mark"><span class="local-dot" aria-hidden="true"></span>Stored on this computer</div>
+        <p>Raw captures stay separate from labels and derived files.</p>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="crumb" id="breadcrumb">Workspace / Overview</div>
+        <div class="top-actions">
+          <div class="top-status"><span class="status-dot" aria-hidden="true"></span>Device not connected</div>
+          <div class="avatar" aria-label="Local workspace">LW</div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="view" id="view-overview" aria-labelledby="title-overview">
+          <div class="page-heading">
+            <div><div class="eyebrow">Project workspace</div><h1 id="title-overview">Good afternoon</h1><p class="lede">Prepare a recording, review session quality, and keep every dataset traceable to its source.</p></div>
+            <button class="btn btn-primary" type="button" data-go="record">＋ &nbsp;Prepare recording</button>
+          </div>
+
+          <div class="banner" role="status">
+            <div class="banner-icon" aria-hidden="true">!</div>
+            <div><strong>Physical setup is not verified</strong><small>The board and sensor must pass M6 checks before recordings can be treated as physically verified.</small></div>
+          </div>
+
+          <div class="overview-grid">
+            <div class="stack">
+              <section class="surface" aria-labelledby="readiness-title">
+                <div class="surface-body">
+                  <div class="readiness">
+                    <div class="readiness-copy"><span class="pill pill-amber">Setup incomplete</span><h2 id="readiness-title">Recording readiness</h2><p>Connect the XIAO, confirm the sensor identity, and check the session labels before capturing.</p></div>
+                    <button class="btn btn-secondary" type="button" data-go="record">Review setup</button>
+                  </div>
+                  <div class="checklist">
+                    <div class="check-row"><span class="check-icon" aria-hidden="true">1</span><div><div class="check-title">Board and breakout checks</div><div class="check-note">Power path, wiring, and sensor variant</div></div><span class="pill pill-amber">Not verified</span></div>
+                    <div class="check-row"><span class="check-icon" aria-hidden="true">2</span><div><div class="check-title">Serial device</div><div class="check-note">Port and firmware header</div></div><span class="pill pill-slate">Disconnected</span></div>
+                    <div class="check-row"><span class="check-icon" aria-hidden="true">3</span><div><div class="check-title">Session labels</div><div class="check-note">Pseudonymous writer, prompt, repetition</div></div><span class="pill pill-green">Ready to enter</span></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="surface" aria-labelledby="workflow-title">
+                <div class="surface-head"><h2 id="workflow-title">A careful path from recording to evaluation</h2><span class="pill pill-slate">M7 recognition work is pending</span></div>
+                <ol class="steps">
+                  <li class="step"><div class="step-number">01 · RECORD</div><div class="step-title">Capture raw sessions</div><p class="step-note">Keep the original stream and events immutable.</p></li>
+                  <li class="step"><div class="step-number">02 · REVIEW</div><div class="step-title">Check quality and gaps</div><p class="step-note">Resolve failed captures before export.</p></li>
+                  <li class="step"><div class="step-number">03 · EVALUATE</div><div class="step-title">Hold out sessions</div><p class="step-note">Model training is a future workflow.</p></li>
+                </ol>
+              </section>
+
+              <section class="surface" aria-labelledby="recent-title">
+                <div class="surface-head"><h2 id="recent-title">Recent sessions</h2><button class="btn btn-quiet" type="button" data-go="sessions">View all sessions →</button></div>
+                <div class="surface-body">
+                  <ul class="session-list">
+                    <li class="session-row"><div><div class="session-name">Synthetic clean stream</div><div class="session-sub">Simulator · seed 20261103 · example only</div></div><div class="session-cell">Nov 3, 2026</div><div class="session-cell">374,400 rows</div><span class="pill pill-green">CLEAN</span></li>
+                    <li class="session-row"><div><div class="session-name">Virtual reconnect case</div><div class="session-sub">Fault injection · expected disconnect · example only</div></div><div class="session-cell">Nov 3, 2026</div><div class="session-cell">56 rows</div><span class="pill pill-amber">EXPECTED</span></li>
+                  </ul>
+                </div>
+                <div class="surface-foot">Example records are synthetic. No physical handwriting data is present in this mockup.</div>
+              </section>
+            </div>
+
+            <aside class="stack" aria-label="Project status">
+              <section class="surface" aria-labelledby="device-title">
+                <div class="surface-head"><h2 id="device-title">Device status</h2><span class="pill pill-slate">Offline</span></div>
+                <div class="surface-body">
+                  <div class="health-list">
+                    <div class="health-item"><span class="health-name">Serial connection</span><span class="health-value">Not connected</span></div>
+                    <div class="health-item"><span class="health-name">Expected sensor</span><span class="health-value">LSM6DS3 · 0x69</span></div>
+                    <div class="health-item"><span class="health-name">Target rate</span><span class="health-value">208 Hz</span></div>
+                    <div class="health-item"><span class="health-name">Hardware evidence</span><span class="pill pill-amber">Not verified</span></div>
+                  </div>
+                  <div class="notice-block"><strong>Do not infer identity from this target.</strong> The actual breakout and WHO_AM_I response must be checked when hardware is connected.</div>
+                </div>
+              </section>
+              <section class="surface" aria-labelledby="quality-title">
+                <div class="surface-head"><h2 id="quality-title">Latest quality summary</h2><span class="pill pill-slate">Synthetic</span></div>
+                <div class="surface-body">
+                  <div class="stat-grid">
+                    <div class="stat"><div class="stat-value">208.00</div><div class="stat-label">Estimated Hz</div></div>
+                    <div class="stat"><div class="stat-value">0</div><div class="stat-label">Sequence gaps</div></div>
+                    <div class="stat"><div class="stat-value">0</div><div class="stat-label">Clipped samples</div></div>
+                  </div>
+                  <div class="notice-block"><strong>Quality verdict: CLEAN</strong><br>For the saved synthetic run only. It does not verify the physical sensor.</div>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-record" aria-labelledby="title-record" hidden>
+          <div class="page-heading"><div><div class="eyebrow">Acquisition</div><h1 id="title-record">Prepare a recording</h1><p class="lede">Add trial metadata first. The raw capture remains unchanged; labels are stored separately.</p></div><span class="pill pill-amber">Hardware not verified</span></div>
+          <div class="two-col">
+            <div class="stack">
+              <section class="surface"><div class="surface-head"><h2>Session details</h2><span class="pill pill-slate">Local metadata</span></div><div class="surface-body">
+                <div class="field-grid">
+                  <div class="field"><label for="writer">Writer code</label><input id="writer" name="writer" placeholder="e.g. W-014"><span class="field-help">Use a pseudonymous code. Do not enter a full name.</span></div>
+                  <div class="field"><label for="session">Session ID</label><input id="session" name="session" placeholder="e.g. day-02-remount"></div>
+                  <div class="field"><label for="prompt">Prompt</label><input id="prompt" name="prompt" placeholder="e.g. lowercase a"></div>
+                  <div class="field"><label for="trial">Repetition</label><input id="trial" name="trial" type="number" min="1" value="1"></div>
+                  <div class="field"><label for="source">Source type</label><select id="source" name="source"><option>Real device</option><option>Synthetic simulation</option></select><span class="field-help">The saved manifest must match the actual source.</span></div>
+                  <div class="field"><label for="condition">Trial condition</label><select id="condition" name="condition"><option>Comfortable speed</option><option>Fast writing</option><option>Calibration</option><option>Other</option></select></div>
+                  <div class="field field-full"><label for="notes">Notes <span style="font-weight:400;color:var(--muted)">(optional)</span></label><textarea id="notes" name="notes" placeholder="Mount, prompt variation, or session notes"></textarea></div>
+                </div>
+              </div></section>
+              <section class="surface"><div class="surface-head"><h2>Live signal preview</h2><span class="pill pill-slate">Example waveform</span></div><div class="surface-body">
+                <div class="device-state"><span class="device-state-icon" aria-hidden="true">○</span><div><div class="device-state-title">No serial device connected</div><p>This sample waveform is synthetic artwork for layout only. It is not live sensor data.</p></div></div>
+                <svg class="wave" viewBox="0 0 760 120" role="img" aria-label="Illustrative synthetic accelerometer and gyroscope waveforms, not live data">
+                  <path d="M0 60H760M0 30H760M0 90H760" stroke="#e3ebe7" stroke-width="1"/>
+                  <path d="M0 63 C30 60 35 33 65 39 S100 86 135 70 S178 44 207 53 S246 91 280 74 S317 31 350 43 S394 83 427 64 S464 40 495 50 S532 91 568 72 S602 32 638 47 S690 82 715 65 S740 48 760 58" fill="none" stroke="#137c73" stroke-width="2.2"/>
+                  <path d="M0 87 C27 84 37 77 63 84 S101 52 132 62 S171 80 204 83 S243 55 277 62 S317 92 349 82 S392 60 425 72 S462 90 494 82 S530 61 564 67 S604 90 636 81 S675 55 710 66 S739 81 760 76" fill="none" stroke="#c38a31" stroke-width="1.8"/>
+                </svg>
+                <div class="field-help" style="margin-top:9px">Teal: illustrative acceleration · amber: illustrative angular rate · timestamps not shown</div>
+              </div></section>
+            </div>
+            <aside class="stack">
+              <section class="surface"><div class="surface-head"><h2>Device connection</h2><span class="pill pill-red">Not connected</span></div><div class="surface-body">
+                <div class="field"><label for="port">Serial port</label><select id="port" name="port"><option>No ports found</option></select></div>
+                <div class="field" style="margin-top:14px"><label for="baud">Baud rate</label><select id="baud" name="baud"><option>921600</option></select></div>
+                <button class="btn btn-secondary" type="button" data-mock="Port discovery is not connected in this design prototype.">↻ &nbsp;Search ports</button>
+                <div class="notice-block"><strong>After connection:</strong> show detected format, WHO_AM_I, firmware boot ID, and the explicit M6 hardware-verification state.</div>
+              </div></section>
+              <section class="surface"><div class="surface-head"><h2>Capture policy</h2></div><div class="surface-body"><div class="health-list">
+                <div class="health-item"><span class="health-name">Nominal ODR</span><span class="health-value">208 Hz</span></div>
+                <div class="health-item"><span class="health-name">Minimum valid rows</span><span class="health-value">1</span></div>
+                <div class="health-item"><span class="health-name">Silence timeout</span><span class="health-value">2 seconds</span></div>
+                <div class="health-item"><span class="health-name">Output folder</span><span class="health-value">Local / captures</span></div>
+              </div><div class="notice-block">Start is disabled until a device is found and trial metadata is complete. A simulator run must be labeled synthetic.</div></div><div class="surface-foot"><button class="btn btn-primary" type="button" disabled>Start capture</button> <span>Connect hardware to enable</span></div></section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-sessions" aria-labelledby="title-sessions" hidden>
+          <div class="page-heading"><div><div class="eyebrow">Local recordings</div><h1 id="title-sessions">Sessions</h1><p class="lede">Review source, labels, report verdict, and observed gaps before creating derived data.</p></div><button class="btn btn-primary" type="button" data-go="record">＋ &nbsp;New recording</button></div>
+          <section class="surface"><div class="surface-head"><h2>Recent captures</h2><span class="pill pill-slate">Example records · synthetic</span></div><div class="surface-body table-wrap">
+            <table><caption style="text-align:left;padding:0 12px 12px;color:var(--muted);font-size:12px">Illustrative session inventory. No device files are loaded in this prototype.</caption><thead><tr><th>Session</th><th>Source</th><th>Rows</th><th>Rate</th><th>Gaps</th><th>Verdict</th><th>Date</th></tr></thead><tbody>
+              <tr><td><strong>clean-30min</strong><br><span class="session-sub">simulator · seed 20261103</span></td><td><span class="pill pill-slate">Synthetic</span></td><td>374,400</td><td>208.00 Hz</td><td>0</td><td><span class="pill pill-green">CLEAN</span></td><td>Nov 3, 2026</td></tr>
+              <tr><td><strong>virtual-reconnect</strong><br><span class="session-sub">planned USB reconnect</span></td><td><span class="pill pill-slate">Synthetic</span></td><td>56</td><td>208.00 Hz</td><td>0</td><td><span class="pill pill-amber">DEGRADED_EXPECTED</span></td><td>Nov 3, 2026</td></tr>
+              <tr><td><strong>queue-overflow</strong><br><span class="session-sub">native queue fault case</span></td><td><span class="pill pill-slate">Synthetic</span></td><td>1,000</td><td>208.00 Hz</td><td>9</td><td><span class="pill pill-red">FAILED CLEAN</span></td><td>Nov 3, 2026</td></tr>
+            </tbody></table>
+          </div><div class="surface-foot">Open a row in the production UI to inspect `report.json`, events, and an immutable raw CSV preview.</div></section>
+        </section>
+
+        <section class="view" id="view-dataset" aria-labelledby="title-dataset" hidden>
+          <div class="page-heading"><div><div class="eyebrow">Derived data</div><h1 id="title-dataset">Dataset export</h1><p class="lede">Create traceable canonical files without changing the original capture.</p></div><span class="pill pill-slate">No source selected</span></div>
+          <div class="two-col">
+            <section class="surface"><div class="surface-head"><h2>Export settings</h2><span class="pill pill-amber">Example settings</span></div><div class="surface-body">
+              <div class="field-grid">
+                <div class="field field-full"><label for="capture-file">Capture file</label><input id="capture-file" value="Select a capture CSV…" readonly></div>
+                <div class="field"><label for="source-type">Source type</label><select id="source-type"><option>Choose source type…</option><option>Real device</option><option>Synthetic simulation</option></select></div>
+                <div class="field"><label for="rate">Target sample rate</label><select id="rate"><option>Keep raw 208 Hz</option><option>100 Hz (anti-aliased)</option></select></div>
+                <div class="field field-full"><label for="calibration-file">Calibration file</label><input id="calibration-file" value="Optional · calibration JSON" readonly><span class="field-help">Without a reviewed calibration, corrected columns remain blank.</span></div>
+              </div>
+              <div class="notice-block"><strong>Gap policy:</strong> filter each continuity segment independently. Never interpolate across a sequence gap, reboot, FIFO epoch, or timestamp discontinuity.</div>
+              <div style="margin-top:18px"><button class="btn btn-primary" type="button" data-mock="Dataset export is not connected in this design prototype.">Create derived dataset</button></div>
+            </div></section>
+            <section class="surface"><div class="surface-head"><h2>Output manifest</h2></div><div class="surface-body"><div class="health-list">
+              <div class="health-item"><span class="health-name">Source capture hash</span><span class="health-value">Added on export</span></div>
+              <div class="health-item"><span class="health-name">Configuration hash</span><span class="health-value">Added on export</span></div>
+              <div class="health-item"><span class="health-name">Calibration status</span><span class="pill pill-amber">Unknown</span></div>
+              <div class="health-item"><span class="health-name">Physical verification</span><span class="pill pill-amber">Not assessed</span></div>
+            </div><div class="notice-block">The sidecar records source type, sample units, timing source, validity mask, segments, and hashes.</div></div></section>
+          </div>
+        </section>
+
+        <section class="view" id="view-train" aria-labelledby="title-train" hidden>
+          <div class="page-heading"><div><div class="eyebrow">Recognition experiments · M7</div><h1 id="title-train">Train &amp; evaluate</h1><p class="lede">A future workflow for labeled handwriting data, session-safe splits, and reproducible metrics.</p></div><span class="pill pill-amber">Not implemented</span></div>
+          <div class="lock-note"><strong>Training is not available yet.</strong> This repository does not contain a handwriting recognition model or training backend. The panel below shows the proposed workflow only; it cannot start a training job.</div>
+          <div class="two-col">
+            <section class="surface disabled-panel" aria-labelledby="experiment-title"><div class="surface-head"><h2 id="experiment-title">Experiment setup</h2><span class="pill pill-slate">Design preview</span></div><div class="surface-body">
+              <div class="field-grid">
+                <div class="field"><label for="dataset-choice">Dataset</label><select id="dataset-choice" disabled><option>Export a reviewed dataset first</option></select></div>
+                <div class="field"><label for="target-labels">Target labels</label><select id="target-labels" disabled><option>Letters and short words</option></select></div>
+                <div class="field field-full"><label>Evaluation split</label><div class="split-visual" aria-label="Illustration of grouped train and test data"><div class="split-train"></div><div class="split-test"></div></div><div class="split-caption"><span>Train · sessions / writers grouped</span><span>Held-out test</span></div><span class="field-help">Never randomly split adjacent windows from the same recording.</span></div>
+              </div>
+              <div style="margin-top:18px"><button class="btn btn-primary" type="button" disabled>Start experiment</button></div>
+            </div></section>
+            <aside class="surface disabled-panel"><div class="surface-head"><h2>Planned results</h2></div><div class="surface-body"><div class="health-list">
+              <div class="health-item"><span class="health-name">Per-letter error</span><span class="health-value">—</span></div>
+              <div class="health-item"><span class="health-name">Word error rate</span><span class="health-value">—</span></div>
+              <div class="health-item"><span class="health-name">Held-out sessions</span><span class="health-value">—</span></div>
+              <div class="health-item"><span class="health-name">Reproducibility</span><span class="health-value">Seed + dataset hash</span></div>
+            </div><div class="notice-block">Real writer sessions are required before recognition feasibility can be assessed. Synthetic motion is not a handwriting benchmark.</div></div></aside>
+          </div>
+        </section>
+
+        <p class="footer-note">Design concept · sample data only · no serial, filesystem, or training backend connected</p>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script>
+    const labels = { overview: "Overview", record: "Record", sessions: "Sessions", dataset: "Dataset", train: "Train & evaluate" };
+    const navButtons = [...document.querySelectorAll("[data-view]")];
+    const views = [...document.querySelectorAll(".view")];
+    const breadcrumb = document.getElementById("breadcrumb");
+    const toast = document.getElementById("toast");
+    let toastTimer;
+
+    function showView(name) {
+      views.forEach((view) => { view.hidden = view.id !== `view-${name}`; });
+      navButtons.forEach((button) => {
+        if (button.dataset.view === name) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
+      breadcrumb.textContent = `Workspace / ${labels[name]}`;
+      document.querySelector(`#view-${name} h1`)?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function announce(message) {
+      toast.textContent = message;
+      toast.hidden = false;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3600);
+    }
+
+    navButtons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
+    document.querySelectorAll("[data-go]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.go)));
+    document.querySelectorAll("[data-mock]").forEach((button) => button.addEventListener("click", () => announce(button.dataset.mock)));
+  </script>
+</body>
+</html>
