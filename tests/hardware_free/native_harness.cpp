@@ -26,7 +26,7 @@ void setup_device(){
   require(Mock::registers[0x0A]==0x2E,"FIFO mode mismatch");
   require(Mock::registers[0x0D]==0x08,"watermark interrupt config mismatch");
 }
-void drain_once(){if(Mock::interrupt_handler)Mock::interrupt_handler();loop();}
+void drain_once(){loop();}
 void test_exact_frames(){
   setup_device();push_frames(0,24);drain_once();
   require(Mock::queued.size()==23,"first full frame must be discarded");
@@ -94,10 +94,58 @@ void test_800_frame_stress(){
   require(recoveries==0 && queueDrops==0,"healthy repeated capture should not reset or drop");
   std::cout<<"PASS: 800 consecutive synthetic frames survive real firmware decoding without loss or reordering\n";
 }
+void test_spi_register_contract(){
+  setup_device();
+  require(Mock::spi_errors==0,"firmware violated SPI CS/mode/order transaction rules");
+  require(Mock::spi_mode==SPI_MODE3 && Mock::spi_order==MSBFIRST && Mock::spi_hz==4000000,
+          "firmware SPI settings do not match the specified mode-3 4MHz contract");
+  require(Mock::transaction_count>20,"register configuration did not use bounded transactions");
+  const uint8_t previous=Mock::registers[0x0F];
+  Mock::write_register(0x0F,0x00);
+  require(Mock::registers[0x0F]==previous,"WHO_AM_I register must be read-only");
+  require(Mock::read_register(0x55)==0,"unsupported register reads must be zero in this mock profile");
+  std::cout<<"PASS: register access uses mode-3 MSB-first bounded CS transactions and RO identity semantics\n";
+}
+void test_fifo_capacity_profiles_and_level_irq(){
+  Mock::reset();
+  Mock::fifo_capacity_words=2048; // LSM6DS3TR-C 4 KiB profile.
+  Mock::write_register(0x06,48);Mock::write_register(0x07,0);
+  Mock::write_register(0x0D,0x08);Mock::write_register(0x0A,0x2E);
+  unsigned edges=0;
+  Mock::interrupt_handler=+[](){++Mock::fail_queue_calls;};
+  Mock::fail_queue_calls=0;
+  for(unsigned i=0;i<2048;++i)Mock::push_word(uint16_t(i));
+  require(Mock::fifo.size()==2048 && Mock::fail_queue_calls==1,
+          "watermark interrupt must be a single rising edge while level remains asserted");
+  require((Mock::read_register(0x3B)&0xA0)==0xA0,"full and watermark status bits must assert at capacity");
+  Mock::push_word(2048);
+  require(Mock::fifo.size()==2048 && Mock::fifo_overrun && Mock::dropped_oldest_words==1,
+          "continuous FIFO must retain capacity and expose overwritten-oldest overrun");
+  require(Mock::fifo_pattern==1,"overwriting one oldest word must advance the FIFO pattern");
+  require((Mock::read_register(0x3B)&0x40)!=0,"overrun status must remain observable");
+  Mock::write_register(0x0A,0);
+  require(Mock::fifo.empty() && !Mock::fifo_overrun && !Mock::irq_level,
+          "bypass mode must clear FIFO state and deassert the watermark level");
+  (void)edges;
+  std::cout<<"PASS: configurable 4KiB FIFO capacity, overwrite flags and level/rising-edge watermark behavior\n";
+}
+void test_wrong_id_and_readback_fault_controls(){
+  Mock::reset();
+  Mock::sensor_id=0x00;Mock::registers[0x0F]=Mock::sensor_id;
+  require(Mock::read_register(0x0F)==0x00,"wrong-ID fault injection did not reach WHO_AM_I");
+  Mock::registers[0x10]=0x50;Mock::readback_mismatch_address=0x10;
+  require(Mock::read_register(0x10)!=Mock::registers[0x10],"register readback mismatch injection failed");
+  Mock::stuck_reset=true;Mock::registers[0x12]=1;
+  require((Mock::read_register(0x12)&1)!=0,"stuck reset injection failed");
+  std::cout<<"PASS: wrong-ID, readback mismatch and stuck-reset peripheral faults are controllable\n";
+}
 int main(){
+  std::cout<<std::unitbuf;
   try{
     test_exact_frames();test_queue_overflow();test_overrun_recovery();test_nonzero_pattern();
     test_pattern_mismatch_recovery();test_800_frame_stress();
+    test_spi_register_contract();test_fifo_capacity_profiles_and_level_irq();
+    test_wrong_id_and_readback_fault_controls();
   }catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}
   std::cout<<"All firmware-native virtual-peripheral tests passed. Hardware behavior remains unverified.\n";
   return 0;

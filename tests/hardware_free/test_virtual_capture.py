@@ -1,9 +1,4 @@
-"""Synthetic integration tests for unchanged tools/measure.py.
-
-Three explicitly named known-defect tests pass only by confirming that the
-current implementation still misses those defects. After fixing measure.py,
-replace their assertions with checks for correct behavior.
-"""
+"""Synthetic report regressions against simulator ground truth."""
 import contextlib
 import csv
 import io
@@ -32,6 +27,18 @@ class VirtualReportTests(unittest.TestCase):
         self.assertEqual(report['maximum_cumulative_counters_per_session']['queue_drops'],0)
         self.assertAlmostEqual(report['segments'][0]['model']['estimated_hz'],truth['true_hz'],delta=0.15)
 
+    def test_120_second_clean_run_preserves_expected_rate_and_quality(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            truth = generate(root / 'capture.csv', seconds=120, scenario='clean', seed=120)
+            with contextlib.redirect_stdout(io.StringIO()):
+                measure.analyze(root / 'capture.csv', root / 'report', source='virtual', test_intent='clean')
+            report = json.loads((root / 'report' / 'report.json').read_text())
+        self.assertGreater(report['rows'], 24_000)
+        self.assertEqual(report['missing_host_sequence_numbers'], 0)
+        self.assertEqual(report['quality_verdict'], 'CLEAN')
+        self.assertAlmostEqual(report['segments'][0]['model']['estimated_hz'], truth['true_hz'], delta=0.1)
+
     def test_queue_drop_is_reported_as_sequence_gap(self):
         truth,report,_=self.run_case('queue_drop')
         self.assertGreater(truth['true_missing_sequence_numbers'],0)
@@ -48,16 +55,18 @@ class VirtualReportTests(unittest.TestCase):
         self.assertEqual({x['epoch'] for x in report['segments']},{0,1})
         self.assertEqual(report['maximum_cumulative_counters_per_session']['fifo_recoveries'],1)
 
-    def test_known_defect_nonzero_pattern_timestamps_unanchored(self):
-        _,report,_=self.run_case('nonzero_pattern')
-        # KNOWN BUG: although the C++ decoder accepts pattern=2, Python drops every anchor.
-        self.assertEqual(report['segments'],[])
+    def test_nonzero_pattern_anchors_use_word_offset(self):
+        truth,report,_=self.run_case('nonzero_pattern')
+        self.assertEqual(report['segments'][0]['anchor_pattern_offsets'],[2])
+        self.assertAlmostEqual(report['segments'][0]['model']['estimated_hz'],truth['true_hz'],delta=0.15)
+        self.assertGreaterEqual(report['segments'][0]['model']['anchors'],3)
 
-    def test_known_defect_clipping_not_reported(self):
+    def test_clipping_is_reported_as_failed_clean_quality(self):
         truth,report,_=self.run_case('clipping')
         self.assertGreater(truth['clipped_injected_frames'],0)
-        # KNOWN OMISSION: no clipping/saturation detection in report.
-        self.assertNotIn('clipping',report)
+        self.assertGreater(report['quality']['clipping_count'],0)
+        self.assertEqual(report['quality_verdict'],'FAILED')
+        self.assertIn('CLIPPING_DETECTED',report['quality_reasons'])
 
     def test_irq_outliers_increase_fit_residual_spread(self):
         _,clean,_=self.run_case('clean',irq_jitter_us=0)
@@ -65,7 +74,7 @@ class VirtualReportTests(unittest.TestCase):
         rms=lambda r: r['segments'][0]['model']['residual_us']['max']-r['segments'][0]['model']['residual_us']['min']
         self.assertGreater(rms(bad),rms(clean)+10000)
 
-    def test_known_defect_empty_csv_missing_failed_verdict(self):
+    def test_empty_csv_has_explicit_failed_quality_verdict(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)
             with (base/'empty.csv').open('w',newline='') as f:
@@ -74,6 +83,7 @@ class VirtualReportTests(unittest.TestCase):
                 measure.analyze(base/'empty.csv',base/'out')
             report=json.loads((base/'out'/'report.json').read_text())
             self.assertEqual(report['rows'],0)
-            self.assertNotIn('verdict',report) # KNOWN OMISSION
+            self.assertEqual(report['quality_verdict'],'FAILED')
+            self.assertIn('NO_SAMPLES',report['quality_reasons'])
 
 if __name__=='__main__':unittest.main()
