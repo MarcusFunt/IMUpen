@@ -1,0 +1,508 @@
+{
+  "schema_version": 1,
+  "experiment": "M6-B independent six-axis IMU augmentation ablation",
+  "run_kind": "sample",
+  "dataset": "OnHW-Words500 writer-independent",
+  "archive_sha256": "2a1f1989cb56ea519b431913f15f36df1e776b3393c6d70cbb56ecd46fd8bff4",
+  "fold": 0,
+  "seed": 2026,
+  "model_type": "resnet_bilstm_ctc",
+  "device": "cpu",
+  "batch_size": 8,
+  "epochs": 1,
+  "train_sample_count": 16,
+  "validation_sample_count": 16,
+  "train_sample_indices": [
+    525,
+    1588,
+    3531,
+    3560,
+    7066,
+    7274,
+    7375,
+    9301,
+    12736,
+    12810,
+    14027,
+    14362,
+    15740,
+    16546,
+    16952,
+    18025
+  ],
+  "validation_sample_indices": [
+    42,
+    435,
+    657,
+    783,
+    1504,
+    1575,
+    2038,
+    2378,
+    2530,
+    2638,
+    3295,
+    3343,
+    3452,
+    3619,
+    3737,
+    4860
+  ],
+  "normalization": {
+    "source": "selected training samples only",
+    "mean": [
+      -2303.135986328125,
+      13638.2880859375,
+      -8136.44970703125,
+      -37.49089813232422,
+      -110.04925537109375,
+      34.37044906616211
+    ],
+    "std": [
+      3163.208251953125,
+      2019.767578125,
+      2601.865234375,
+      539.8048706054688,
+      828.7297973632812,
+      526.2348022460938
+    ]
+  },
+  "variants": {
+    "none": {
+      "augmentation": {
+        "name": "none",
+        "online_transforms": [],
+        "sequence_concatenation": false,
+        "concat_delimiter": null,
+        "concat_gap_frames": null,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 35.417860984802246,
+          "validation_loss": 19.84880256652832,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 16,
+      "sequence_concatenations_added": 0,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "none"
+    },
+    "temporal_stretch": {
+      "augmentation": {
+        "name": "temporal_stretch",
+        "online_transforms": [
+          "temporal_stretch"
+        ],
+        "sequence_concatenation": false,
+        "concat_delimiter": null,
+        "concat_gap_frames": null,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 35.11043739318848,
+          "validation_loss": 19.928190231323242,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 16,
+      "sequence_concatenations_added": 0,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "temporal_stretch"
+    },
+    "gaussian_noise": {
+      "augmentation": {
+        "name": "gaussian_noise",
+        "online_transforms": [
+          "gaussian_noise"
+        ],
+        "sequence_concatenation": false,
+        "concat_delimiter": null,
+        "concat_gap_frames": null,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 35.417914390563965,
+          "validation_loss": 19.849556922912598,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 16,
+      "sequence_concatenations_added": 0,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "gaussian_noise"
+    },
+    "sensor_bias_gain": {
+      "augmentation": {
+        "name": "sensor_bias_gain",
+        "online_transforms": [
+          "sensor_bias_gain"
+        ],
+        "sequence_concatenation": false,
+        "concat_delimiter": null,
+        "concat_gap_frames": null,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 35.42085838317871,
+          "validation_loss": 19.860569953918457,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 16,
+      "sequence_concatenations_added": 0,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "sensor_bias_gain"
+    },
+    "rotation_3d": {
+      "augmentation": {
+        "name": "rotation_3d",
+        "online_transforms": [
+          "rotation_3d"
+        ],
+        "sequence_concatenation": false,
+        "concat_delimiter": null,
+        "concat_gap_frames": null,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 35.39638710021973,
+          "validation_loss": 19.74294662475586,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 16,
+      "sequence_concatenations_added": 0,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "rotation_3d"
+    },
+    "sequence_concat": {
+      "augmentation": {
+        "name": "sequence_concat",
+        "online_transforms": [],
+        "sequence_concatenation": true,
+        "concat_delimiter": "",
+        "concat_gap_frames": 8,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 23.51190933227539,
+          "validation_loss": 4.315401315689087,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 25,
+      "sequence_concatenations_added": 9,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "sequence_concat"
+    },
+    "combined": {
+      "augmentation": {
+        "name": "combined",
+        "online_transforms": [
+          "temporal_stretch",
+          "gaussian_noise",
+          "sensor_bias_gain",
+          "rotation_3d"
+        ],
+        "sequence_concatenation": true,
+        "concat_delimiter": "",
+        "concat_gap_frames": 8,
+        "seed": 2026,
+        "applied_only_to_training": true,
+        "normalization_fit_before_augmentation": true,
+        "parameters": {
+          "temporal_stretch_factor": [
+            0.9,
+            1.1
+          ],
+          "gaussian_noise_axis_std_fraction": 0.01,
+          "sensor_gain_range": [
+            0.97,
+            1.03
+          ],
+          "sensor_bias_std_fraction": 0.02,
+          "rotation_euler_degrees": [
+            -5.0,
+            5.0
+          ]
+        }
+      },
+      "final_metrics": {
+        "cer": 1.0,
+        "wer": 1.0
+      },
+      "final_metric_counts": {
+        "character_errors": 93,
+        "reference_characters": 93,
+        "word_errors": 16,
+        "reference_words": 16
+      },
+      "epoch_metrics": [
+        {
+          "epoch": 1,
+          "train_loss": 22.843905487060546,
+          "validation_loss": 4.290251731872559,
+          "validation_cer": 1.0,
+          "validation_wer": 1.0,
+          "character_errors": 93,
+          "reference_characters": 93,
+          "word_errors": 16,
+          "reference_words": 16,
+          "validation_samples": 16
+        }
+      ],
+      "train_sequences_after_augmentation": 25,
+      "sequence_concatenations_added": 9,
+      "sequence_concatenations_dropped_ctc": 0,
+      "run_directory": "combined"
+    }
+  },
+  "fairness_checks": {
+    "same_archive_fold_and_sample_indices": true,
+    "same_model_optimizer_seed_and_epoch_count": true,
+    "same_training_only_normalization": true,
+    "validation_not_augmented": true,
+    "writer_leakage": false,
+    "sequence_concatenation_uses_training_only_same_writer_session": true
+  },
+  "interpretation": "Sample-capped implementation smoke experiment. Results verify the pipeline and are not benchmark or accuracy claims.",
+  "measured_at_utc": "2026-10-30T11:48:12.702772+00:00",
+  "source_archive": "OnHW-Words500_indep.zip",
+  "model_parameters": 4676540,
+  "model_configuration": {
+    "num_classes": 60,
+    "input_channels": 6,
+    "channels": [
+      64,
+      128,
+      256
+    ],
+    "hidden_size": 256,
+    "lstm_layers": 3,
+    "dropout": 0.2
+  },
+  "num_threads": 2,
+  "mixed_precision": false,
+  "optimizer": "AdamW(lr=0.001, weight_decay=0.0001)",
+  "python_version": "3.13.5",
+  "torch_version": "2.13.0+xpu",
+  "numpy_version": "2.2.6",
+  "deterministic_algorithms": true
+}

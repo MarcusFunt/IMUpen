@@ -1,0 +1,20 @@
+{
+  "data": "../datasets/OnHW-words500_indep.zip",
+  "sensor_profiles": [
+    "front_acc_gyro6",
+    "rear_acc_shared_gyro6",
+    "dual_acc_shared_gyro9",
+    "front_acc_gyro_mag9",
+    "front_acc_shared_gyro_force7",
+    "front_acc_rear_acc_shared_gyro_mag12",
+    "front_acc_rear_acc_shared_gyro_force10"
+  ],
+  "model_types": ["resnet_bilstm_ctc"],
+  "folds": [0],
+  "seeds": [1337],
+  "epochs": 10,
+  "batch_size": 32,
+  "device": "auto",
+  "num_threads": 4,
+  "protocol": "writer_independent"
+}

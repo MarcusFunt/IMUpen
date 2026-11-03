@@ -1,0 +1,11 @@
+{
+  "data": "../datasets/OnHW-words500_indep.zip",
+  "fold": 0,
+  "sensor_profile": "front_acc_gyro6",
+  "seed": 1337,
+  "epochs": 10,
+  "batch_size": 32,
+  "device": "auto",
+  "num_threads": 4,
+  "protocol": "writer_independent"
+}

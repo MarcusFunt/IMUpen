@@ -1,0 +1,6 @@
+# One writing prompt per line. UTF-8, including Danish characters if desired.
+hello world
+the quick brown fox
+writing with an inertial pen
+a small experiment
+the pen moves across paper

@@ -1,12 +1,32 @@
+# Python and local environments
 __pycache__/
 *.py[cod]
-/.venv/
-/build/
-/dist/
-/.pytest_cache/
-/.hypothesis/
+*.egg-info/
+.env
+.venv/
+.envrc
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+.ipynb_checkpoints/
+
+# IDEs and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Private, large, or generated data
+/datasets/
+/runs/
 /simulated/
 /measurements/
 /captures/
 /recordings/
 /artifacts/
+/build/
+/dist/
+/firmware/.pio/
+/firmware/.vscode/
+*.npz
+*.bin
+.coverage
