@@ -1,0 +1,115 @@
+name: IMUpen hardware-free CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  hardware-free:
+    name: Python, virtual serial, native harness, sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMUPEN_SCHEDULER_SEED_COUNT: ${{ github.event_name == 'schedule' && '10000' || '1000' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install locked Python requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run Python and native verification
+        run: python tools/run_all.py --sanitizers
+      - name: Upload test reports and reproductions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-free-${{ github.run_id }}
+          path: build/hardware-free
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-portability:
+    name: Windows Python and virtual serial
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked Python requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run Python unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run virtual serial and simulator tests
+        run: python -m unittest discover -s tests/hardware_free -p "test_*.py" -v
+
+  xiao-board-compile:
+    name: XIAO ESP32-S3 compile (no upload)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up pinned Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: "1.4.1"
+      - name: Install pinned Espressif ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.6 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Record board details and compile log
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/firmware
+          arduino-cli board listall "XIAO ESP32S3" | tee build/firmware/boards.txt
+          arduino-cli board details --fqbn esp32:esp32:XIAO_ESP32S3 --show-properties=expanded > build/firmware/board-details.txt
+          arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default --warnings all --build-path build/firmware firmware/IMUpen 2>&1 | tee build/firmware/compile.log
+      - name: Upload compile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiao-compile-${{ github.run_id }}
+          path: build/firmware
+          if-no-files-found: warn
+          retention-days: 14
+
+  nightly-endurance:
+    name: 30-minute synthetic endurance
+    if: github.event_name == 'schedule'
+    needs: [hardware-free, xiao-board-compile]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked Python requirements
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run 30-minute virtual stream and report
+        run: python tools/run_endurance.py --seconds 1800 --seed 20261103
+      - name: Upload bounded endurance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: endurance-${{ github.run_id }}
+          path: build/endurance/report
+          if-no-files-found: warn
+          retention-days: 14

@@ -47,6 +47,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'FIFO decoder test build failed.' }
     Invoke-CompiledTest -Executable $decoderExe -RuntimeDirectory (Split-Path -Parent $compiler.Source) -FailureMessage 'FIFO decoder test failed.'
 
+    $decoderPropertyExe = Join-Path $buildDir 'fifo_decoder_property_test.exe'
+    Write-Host 'Building seeded FIFO decoder property test'
+    & $compiler.Source -std=c++17 -Wall -Wextra -O2 -Ifirmware/IMUpen tests/fifo_decoder_property_test.cpp '-o' $decoderPropertyExe
+    if ($LASTEXITCODE -ne 0) { throw 'FIFO decoder property test build failed.' }
+    Invoke-CompiledTest -Executable $decoderPropertyExe -RuntimeDirectory (Split-Path -Parent $compiler.Source) -FailureMessage 'FIFO decoder property test failed.'
+
     $harnessExe = Join-Path $buildDir 'virtual_imu_test.exe'
     Write-Host 'Building native firmware harness'
     & $compiler.Source -std=c++17 -Wall -Wextra -O2 -Itests/hardware_free/stubs tests/hardware_free/native_harness.cpp '-o' $harnessExe

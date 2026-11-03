@@ -15,6 +15,7 @@
 | Python | 3.13.5 |
 | pyserial | 3.5 installed globally; project setup uses an isolated `.venv` |
 | C++ compiler | MinGW-w64 GCC 15.2.0 (UCRT, POSIX, x86_64) |
+| Sanitizer compiler | LLVM-MinGW Clang 22.1.8 (UCRT, x86_64); ASan and UBSan runtime verified |
 | Arduino CLI | 1.4.1 |
 | Board FQBN | `esp32:esp32:XIAO_ESP32S3` |
 | Espressif Arduino core | 3.3.6 installed |
